@@ -1,4 +1,4 @@
-import {CAMPUS,CAMPUS_RING, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
+import {CAMPUS, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
 const $=id=>document.getElementById(id);
 let client,uid,state,map,circle,next,markers=new Map(),demo=false,joinMode=false,busy=false,polling=false,watch=null,position=null,lastUpload=0,offset=0,lastSuccess=0,timerHandle,pollHandle,wakeLock;
 let savedCode=localStorage.getItem('manhunt-room')||'';
@@ -38,12 +38,7 @@ function openGame(){
   clearInterval(pollHandle);pollHandle=setInterval(sync,3000);
   requestWake();
 }
-function fitMap(){if(!map||!state)return;const area=playArea(state.circle);if(area)map.fitBounds(L.geoJSON(area).getBounds(),{padding:[25,25],maxZoom:18});}
-function playArea(c){
-  const campus={type:'Feature',properties:{},geometry:{type:'Polygon',coordinates:[CAMPUS_RING]}};
-  if(!window.turf){toast('Boundary map could not load. Check your connection and reload.');return null;}
-  return turf.intersect(turf.featureCollection([campus,turf.circle([c.lng,c.lat],Math.max(c.radius,.1)/1000,{steps:96})]));
-}
+function fitMap(){if(map&&state?.circle)map.fitBounds(L.latLng(state.circle.lat,state.circle.lng).toBounds(Math.max(state.circle.radius,80)*2.25),{maxZoom:18});}
 $('fit-map').onclick=fitMap;
 async function sync(action='poll',extra={}){
   if(!state||demo||polling)return;polling=true;
@@ -108,15 +103,14 @@ function render(){
   $('players').replaceChildren(...state.players.filter(p=>!p.left).map(p=>{
     const li=document.createElement('li'),av=document.createElement('span'),name=document.createElement('span'),sub=document.createElement('small'),badge=document.createElement('span');
     av.className='avatar'+(p.role==='hunter'?' infected':'');av.textContent=p.name.slice(0,2).toUpperCase();name.className='player-name';name.textContent=p.name+(p.id===uid?' (you)':'');
-    sub.textContent=finished?(p.reason||''):p.pending_until?'Location grace period':p.lat==null?'Waiting for GPS':!fresh(p,now())?'Location stale':p.accuracy>100?'Low GPS accuracy':p.id===state.host?'Host · GPS live':'GPS live';name.append(sub);
+    sub.textContent=finished?(p.reason||''):p.role==='hunter'?'Location hidden':p.pending_until?'Location grace period':p.lat==null?'Waiting for GPS':!fresh(p,now())?'Location stale':p.accuracy>100?'Low GPS accuracy':p.id===state.host?'Host · GPS live':'GPS live';name.append(sub);
     badge.className='badge'+(p.role==='hunter'?' infected':'');badge.textContent=lobby?'Ready?':p.role;li.append(av,name,badge);return li;
   }));
   if(map){
-    circle.remove();next.remove();
-    circle=L.geoJSON(playArea(state.circle),{style:{color:'#608c23',fillColor:'#b8da71',fillOpacity:.12,weight:2}}).addTo(map);
-    next=L.geoJSON(lobby||finished?null:playArea(state.next),{style:{color:'#986600',fillOpacity:.04,dashArray:'8 8',weight:2}}).addTo(map);
+    circle.setLatLng([state.circle.lat,state.circle.lng]).setRadius(state.circle.radius);
+    next.setLatLng([state.next.lat,state.next.lng]).setRadius(lobby||finished?0:state.next.radius);
     const visible=new Set();
-    for(const p of state.players){if(p.lat==null||p.left||finished)continue;visible.add(p.id);
+    for(const p of state.players){if(p.role==='hunter'||p.lat==null||p.left||finished)continue;visible.add(p.id);
       const icon=L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:`<div class="player-marker ${p.role==='hunter'?'infected':''} ${fresh(p,now())?'':'stale'}"></div>`});
       let marker=markers.get(p.id);if(!marker){marker=L.marker([p.lat,p.lng]).addTo(map);markers.set(p.id,marker);}marker.setLatLng([p.lat,p.lng]).setIcon(icon);
       marker.getElement()?.querySelector('.player-marker')?.append(document.createTextNode(p.name.slice(0,2).toUpperCase()));
@@ -133,7 +127,7 @@ function updateClock(){
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
   $('timer-caption').textContent=phase==='lobby'?'Waiting for your friends':phase==='finished'?'The hunt has ended':phase==='headstart'?'Hunters wait. Runners, get moving.':'Reach the dashed circle before time runs out.';
   $('progress-fill').style.width=`${state.deadline?Math.max(0,Math.min(100,remaining/300*100)):0}%`;
-  $('radius-label').textContent=phase==='lobby'||state.round<=1?'Play area':'Current radius';$('radius-value').textContent=phase==='lobby'||state.round<=1?'Main campus':`${Math.round(state.circle.radius).toLocaleString()} m`;
+  $('radius-label').textContent=phase==='lobby'?'Starting radius':'Current radius';$('radius-value').textContent=`${Math.round(state.circle.radius).toLocaleString()} m`;
   $('map-status').textContent=phase==='finished'?'LOCATIONS CLEARED':demo?'SIMULATED CAMPUS MAP':'LIVE CAMPUS MAP';
   if(!demo&&Date.now()-lastSuccess>12000){$('connection').textContent='Connection is stale. The timer may be ahead of the shared game. Reconnecting…';$('connection').hidden=false;}
   if(demo&&state.deadline&&remaining===0){advanceDemo(state,now());render();}

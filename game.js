@@ -1,6 +1,6 @@
 import {CAMPUS_RING} from './campus-boundary.js';
 export {CAMPUS_RING};
-export const CAMPUS = { lat: 38.9897, lng: -76.9436, radius: 1500 };
+export const CAMPUS = { lat: 38.9897, lng: -76.9436, radius: 800 };
 export function onCampus(p) {
   let inside=false;
   for(let i=0,j=CAMPUS_RING.length-1;i<CAMPUS_RING.length;j=i++){
@@ -19,14 +19,14 @@ export function nextCircle(c, random = Math.random) {
   const radius = Math.max(0, c.radius * .72 - 5);
   for(let attempt=0;attempt<40;attempt++){
     const angle = random()*2*Math.PI;
-    const shift = random()*(c.radius-radius)*.65;
+    const shift = (.45+.53*Math.sqrt(random()))*(c.radius-radius);
     const n={ radius, lat:c.lat+Math.sin(angle)*shift/111320, lng:c.lng+Math.cos(angle)*shift/(111320*Math.cos(c.lat*Math.PI/180)) };
     if(onCampus(n))return n;
   }
   return {...c,radius};
 }
 export function fresh(p, now) { return p.lat != null && p.updated != null && now-p.updated <= 30; }
-export function outside(p,c) { return !onCampus(p)||distance(p,c)>c.radius+20; }
+export function outside(p,c) { return distance(p,c)>c.radius+20; }
 export function formatTime(seconds) {
   const s=Math.max(0,Math.ceil(seconds)); return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
 }

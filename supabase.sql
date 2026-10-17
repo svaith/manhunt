@@ -41,7 +41,7 @@ declare r float8 := greatest(0,(c->>'radius')::float8*.72-5);
  angle float8; shift float8; candidate jsonb; attempt integer;
 begin
  for attempt in 1..40 loop
-  angle:=random()*2*pi();shift:=random()*((c->>'radius')::float8-r)*.65;
+  angle:=random()*2*pi();shift:=(.45+.53*sqrt(random()))*((c->>'radius')::float8-r);
   candidate:=jsonb_build_object('radius',r,
    'lat',(c->>'lat')::float8+sin(angle)*shift/111320,
    'lng',(c->>'lng')::float8+cos(angle)*shift/(111320*cos(radians((c->>'lat')::float8))));
@@ -51,11 +51,22 @@ begin
 end;
 $$;
 
+-- Every client response hides hunter GPS, including reconnects and the hunter's own view.
+create or replace function public.manhunt_snapshot(s jsonb, t double precision)
+returns jsonb language sql immutable set search_path = '' as $$
+ select jsonb_set(s,'{players}',coalesce((select jsonb_agg(
+   case when p->>'role'='hunter' then
+     p||'{"lat":null,"lng":null,"accuracy":null,"updated":null}'::jsonb
+   else p end order by ord)
+ from jsonb_array_elements(s->'players') with ordinality as players(p,ord)), '[]'::jsonb))
+ ||jsonb_build_object('server_now',t);
+$$;
+
 create or replace function public.manhunt_enter(p_name text,p_code text default null)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare u uuid:=auth.uid(); t float8:=extract(epoch from clock_timestamp());
  r public.manhunt_rooms%rowtype; s jsonb; p jsonb; c text;
- campus jsonb:='{"lat":38.9897,"lng":-76.9436,"radius":1500}';
+ campus jsonb:='{"lat":38.9897,"lng":-76.9436,"radius":800}';
 begin
  if u is null then raise exception 'Sign in anonymously first'; end if;
  if p_name is null or length(trim(p_name)) not between 1 and 24 then raise exception 'Name must be 1–24 characters';end if;
@@ -72,7 +83,7 @@ begin
    if not found then raise exception 'Room not found or expired';end if;
    s:=r.state;
    if exists(select 1 from jsonb_array_elements(s->'players') x where x->>'id'=u::text and not coalesce((x->>'left')::boolean,false)) then
-     return s||jsonb_build_object('server_now',t);
+     return public.manhunt_snapshot(s,t);
    end if;
    if s->>'phase'<>'lobby' then raise exception 'This game has already started or ended';end if;
    if jsonb_array_length(s->'players')>=15 then raise exception 'This room is full (15 players)';end if;
@@ -80,7 +91,7 @@ begin
    s:=jsonb_set(s,'{players}',(s->'players')||jsonb_build_array(p));
    update public.manhunt_rooms set state=s where code=c;
  end if;
- return s||jsonb_build_object('server_now',t);
+ return public.manhunt_snapshot(s,t);
 end;
 $$;
 
@@ -91,7 +102,7 @@ declare
  r public.manhunt_rooms%rowtype; s jsonb; players jsonb; p jsonb; c jsonb;
  n integer; i integer; idx integer:=-1; h integer; chosen text[];
  deadline float8; pending float8; lat float8; lng float8; accuracy float8;
- campus jsonb:='{"lat":38.9897,"lng":-76.9436,"radius":1500}';
+ campus jsonb:='{"lat":38.9897,"lng":-76.9436,"radius":800}';
 begin
  if u is null then raise exception 'Sign in anonymously first';end if;
  if p_action is null or p_action not in ('poll','start','tag','end','leave') then raise exception 'Unknown game action';end if;
@@ -121,7 +132,7 @@ begin
          elsif p->>'lat' is not null and p->>'updated' is not null
            and deadline-(p->>'updated')::float8 between 0 and 30
            and coalesce((p->>'accuracy')::float8,9999)<=100 then
-           if not public.manhunt_on_campus(p) or public.manhunt_distance(p,c)>(c->>'radius')::float8+20 then
+           if public.manhunt_distance(p,c)>(c->>'radius')::float8+20 then
              p:=p||'{"role":"hunter","reason":"Outside the circle"}'::jsonb;
            end if;
          else
@@ -147,7 +158,7 @@ begin
    p:=players->idx;
    p:=p||jsonb_build_object('lat',lat,'lng',lng,'accuracy',accuracy,'updated',t);
    if p->>'role'='runner' and p->>'pending_until' is not null and accuracy<=100 then
-     if not public.manhunt_on_campus(p) or public.manhunt_distance(p,p->'pending_circle')>(p->'pending_circle'->>'radius')::float8+20 then p:=p||'{"role":"hunter","reason":"Outside the circle"}'::jsonb;end if;
+     if public.manhunt_distance(p,p->'pending_circle')>(p->'pending_circle'->>'radius')::float8+20 then p:=p||'{"role":"hunter","reason":"Outside the circle"}'::jsonb;end if;
      p:=p||'{"pending_until":null,"pending_circle":null}'::jsonb;
    end if;
    players:=jsonb_set(players,array[idx::text],p);
@@ -161,7 +172,7 @@ begin
    for i in 0..n-1 loop
      p:=players->i;
      if p->>'lat' is null or p->>'updated' is null or t-(p->>'updated')::float8>30 or coalesce((p->>'accuracy')::float8,9999)>100 then raise exception 'Everyone needs a fresh GPS fix (within 100 m accuracy)';end if;
-     if not public.manhunt_on_campus(p) then raise exception 'Everyone must be inside the main-campus boundary';end if;
+     if public.manhunt_distance(p,campus)>820 then raise exception 'Everyone must be inside the starting circle';end if;
    end loop;
    select array_agg(x->>'id') into chosen from (select x from jsonb_array_elements(players) x order by random() limit h) shuffled;
    for i in 0..n-1 loop
@@ -189,9 +200,10 @@ begin
  end if;
  s:=jsonb_set(s,'{players}',players);
  update public.manhunt_rooms set state=s where code=r.code;
- return s||jsonb_build_object('server_now',t);
+ return public.manhunt_snapshot(s,t);
 end;
 $$;
+revoke all on function public.manhunt_snapshot(jsonb,double precision) from public, anon, authenticated;
 revoke all on function public.manhunt_distance(jsonb,jsonb) from public, anon, authenticated;
 revoke all on function public.manhunt_on_campus(jsonb) from public, anon, authenticated;
 revoke all on function public.manhunt_next(jsonb) from public, anon, authenticated;
