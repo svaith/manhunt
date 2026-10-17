@@ -1,0 +1,1 @@
+{"name":"campus-manhunt","version":"1.0.0","private":true,"type":"module","scripts":{"dev":"npx --yes serve .","test":"node --test tests/*.test.js","test:db":"node tests/database.mjs"},"devDependencies":{"@electric-sql/pglite":"0.3.14"}}

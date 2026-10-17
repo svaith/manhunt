@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121611"><meta name="description" content="A campus-wide game of infection. Round up your friends, outrun the hunters, and stay inside the circle.">
+  <title>Manhunt · College Park</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js" defer></script>
+  <script src="config.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="topbar"><a href="./" class="brand"><span class="brand-icon">⌖</span> MANHUNT<span class="edition">COLLEGE PARK</span></a><span class="campus-label"><i></i> UMD CAMPUS</span></header>
+<main>
+  <section id="welcome" class="welcome">
+    <div class="intro"><span class="eyebrow">THE CAMPUS IS YOUR PLAYGROUND</span><h1>Run.<br>Hide.<br><span>Get hunted.</span></h1><p>A game of infection across College Park.<br>One campus. A shrinking circle. No hiding forever.</p><div class="pills"><span>↗ Live locations</span><span>◷ 5-minute rounds</span><span>◎ Last runner standing</span></div></div>
+    <div class="entry-card"><span class="eyebrow">GET YOUR PEOPLE TOGETHER</span><h2>Meet in the lobby.</h2><p>No accounts. Just your name and a room code.</p>
+      <form id="entry-form"><label for="nickname">YOUR NAME</label><input id="nickname" name="nickname" placeholder="What do your friends call you?" maxlength="24" required autocomplete="nickname"><div class="tabs"><button id="create-tab" type="button" class="selected" aria-pressed="true">Create a game</button><button id="join-tab" type="button" aria-pressed="false">Join a game</button></div><div id="join-field" hidden><label for="room-code">ROOM CODE</label><input id="room-code" placeholder="ABC123" maxlength="6" autocomplete="off" autocapitalize="characters"></div><button class="primary full" id="entry-submit">Create lobby <span>↗</span></button><p class="consent">By joining, you agree to share your location with everyone in this room during the lobby and game.</p></form>
+      <div class="divider"><span>TAKE A LOOK FIRST</span></div><button id="demo-button" class="secondary full">Explore a demo <span>→</span></button><p id="setup-note" class="setup-note" hidden>Live rooms need the Supabase setup in README.md. The demo is ready to explore.</p>
+    </div>
+    <div class="how"><span><b>01</b> Join your friends</span><span><b>02</b> Runners get 5 minutes</span><span><b>03</b> Get tagged. Join the hunt.</span></div>
+  </section>
+  <section id="game" hidden>
+    <div class="game-heading"><div><span class="eyebrow">COLLEGE PARK · INFECTION</span><h1>The hunt is on<span class="accent">.</span></h1></div><div class="room-chip"><span id="room-label">ROOM</span><button id="copy-room" title="Copy room invite">------ ⧉</button></div></div>
+    <div id="demo-banner" class="banner" hidden><span>DEMO · Simulated players and locations. Nothing is shared.</span><button id="advance-demo">Skip to next round →</button></div>
+    <div id="connection" class="banner warning" hidden role="status"></div>
+    <div class="game-layout">
+      <div class="map-column"><div class="map-shell"><div class="map-top"><span><i class="live-dot"></i><span id="map-status">LIVE CAMPUS MAP</span></span><button id="fit-map">◎ Fit circle</button></div><div id="map" aria-label="Campus map showing players and game circles"></div><div class="map-legend"><span><i class="legend-dot runner"></i> Runner</span><span><i class="legend-dot hunter"></i> Hunter</span><span><i class="legend-line"></i> Next circle</span></div></div><div class="field-note"><span>↗</span><p><b>Keep this page open and your screen on.</b> Phones may pause location updates in the background. Play only in accessible campus areas; the circle is a game boundary, not permission to enter a building or road.</p></div></div>
+      <aside><div class="timer-card"><div class="card-heading"><span id="phase-label">WAITING ROOM</span><span id="round-label">LOBBY</span></div><div id="timer">--:--</div><p id="timer-caption">Waiting for your friends</p><div class="progress"><div id="progress-fill"></div></div><div class="timer-bottom"><span id="radius-label">Starting area</span><b id="radius-value">2,100 m</b></div></div>
+      <div class="role-card"><span class="eyebrow">YOUR STATUS</span><h2 id="my-role">In the lobby</h2><p id="role-note">The host will start when everyone is ready.</p><button id="location-button" class="secondary full">Enable location ↗</button><p id="location-status" class="small" role="status">Location is off</p><button id="tag-button" class="danger full" hidden>I got tagged →</button></div>
+      <div class="players-card"><div class="card-heading"><span>THE PLAYERS</span><span id="player-count">0 / 15</span></div><div class="counts"><span><b id="runner-count">0</b> runners</span><span><b id="hunter-count">0</b> hunters</span></div><ul id="players"></ul><div id="host-controls" hidden><label for="hunter-select">STARTING HUNTERS</label><select id="hunter-select"></select><button id="start-button" class="primary full">Start game ↗</button><p class="small">Everyone needs a fresh campus location to start.</p></div><button id="end-button" class="text-button" hidden>End game for everyone</button></div>
+      <button id="leave-button" class="text-button full">Leave room</button></aside>
+    </div>
+  </section>
+</main>
+<footer><span>MANHUNT / UMD</span><span>Stay in the circle. Stay in the game.</span><span>Unofficial student project</span></footer>
+<div id="toast" role="status" hidden></div>
+<dialog id="confirm-dialog"><form method="dialog"><span class="eyebrow">MANHUNT</span><h2 id="confirm-title">Are you sure?</h2><p id="confirm-description"></p><div class="dialog-actions"><button value="cancel" class="secondary">Cancel</button><button value="confirm" class="primary">Confirm</button></div></form></dialog>
+</body></html>

@@ -1,0 +1,1 @@
+{"headers":[{"source":"/(.*)","headers":[{"key":"Permissions-Policy","value":"geolocation=(self)"},{"key":"Referrer-Policy","value":"strict-origin-when-cross-origin"},{"key":"X-Content-Type-Options","value":"nosniff"}]}]}
