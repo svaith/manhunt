@@ -20,20 +20,13 @@ await check('start requires GPS',async()=>{await assert.rejects(()=>action(0,cod
 const gps={lat:38.9897,lng:-76.9436,accuracy:10};
 await action(0,code,'poll',gps);await action(1,code,'poll',gps);
 await check('random assignment and headstart',async()=>{s=await action(0,code,'start',{hunters:1});assert.equal(s.phase,'headstart');assert.equal(s.players.filter(p=>p.role==='hunter').length,1);assert.equal(s.deadline-s.server_now,300);});
-await check('hunters only see their own coordinates; others still hidden',async()=>{
+await check('viewer-specific hunter visibility on polls and reconnect',async()=>{
  for(const i of [0,1]){
   for(const snapshot of [await action(i,code,'poll',gps),await enter(i,'Reconnect',code)]){
-   const meId=ids[i];
-   const hunter=snapshot.players.find(p=>p.role==='hunter');
-   const runner=snapshot.players.find(p=>p.role==='runner');
-   if(hunter.id===meId){
-    assert.notEqual(hunter.lat,null);assert.notEqual(hunter.lng,null);
-    assert.notEqual(hunter.accuracy,null);assert.notEqual(hunter.updated,null);
-   }else{
-    assert.equal(hunter.lat,null);assert.equal(hunter.lng,null);
-    assert.equal(hunter.accuracy,null);assert.equal(hunter.updated,null);
-   }
-   assert.equal(runner.lat,gps.lat);assert.equal(runner.lng,gps.lng);
+   const me=snapshot.players.find(p=>p.id===ids[i]);const hunter=snapshot.players.find(p=>p.role==='hunter');
+   assert.equal(hunter.lat,me.role==='hunter'?gps.lat:null);
+   const runner=snapshot.players.find(p=>p.role==='runner');assert.equal(runner.lat,gps.lat);
+   assert.ok(snapshot.players.every(p=>!('ping' in p)));
   }
  }
 });
@@ -52,26 +45,39 @@ code=await active();
 await check('leave forfeits and clears location',async()=>{s=await action(1,code,'leave');assert.equal(s.players[1].left,true);assert.equal(s.players[1].lat,null);assert.equal(s.phase,'finished');});
 code=await active();
 await check('host leave ends room',async()=>{s=await action(0,code,'leave');assert.equal(s.phase,'finished');});
-code=await active();
-await check('runner gets hunter proximity alerts without hunter coordinates',async()=>{
- await edit(code,s=>{
-  const hunter=s.players[0],runner=s.players[1];
-  hunter.role='hunter';runner.role='runner';
-  hunter.lat=38.9898;hunter.lng=-76.9436;hunter.updated=stamp()-1;hunter.accuracy=10;
-  runner.lat=38.98975;runner.lng=-76.94358;runner.updated=stamp()-1;runner.accuracy=10;
- });
- const runnerView=await action(1,code,'poll',gps);
- const hunterView=await action(0,code,'poll',gps);
- assert.equal(runnerView.hunter_nearby,true);
- assert.equal(runnerView.players.find(p=>p.role==='hunter').lat,null);
- assert.equal(hunterView.hunter_nearby,false);
-});
 await check('expired room ends and clears locations',async()=>{s=await enter(0,'Host');code=s.code;await db.query("update public.manhunt_rooms set expires_at=now()-interval '1 second' where code=$1",[code]);s=await action(0,code);assert.equal(s.phase,'finished');});
 await check('starting circle rejects an outside start',async()=>{
  s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
  await action(0,code,'poll',gps);
  await action(1,code,'poll',{lat:38.993,lng:-76.957,accuracy:10});
  await assert.rejects(()=>action(0,code,'start',{hunters:1}),/starting circle/);
+ await action(0,code,'end');
+});
+await check('runner pings remain frozen for 120 seconds while own GPS stays live',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
+ await action(0,code,'poll',gps);await action(1,code,'poll',gps);
+ const moved={...gps,lat:gps.lat+.001};const own=await action(1,code,'poll',moved);
+ assert.equal(own.players[1].lat,moved.lat);
+ const other=await action(0,code);assert.equal(other.players[1].lat,gps.lat);
+ await edit(code,s=>s.players[1].ping.updated=stamp()-121);
+ await action(1,code,'poll',moved);s=await action(0,code);assert.equal(s.players[1].lat,moved.lat);
+ await action(0,code,'end');
+});
+await check('nearby warning is hunt-only, private, fresh, and uses 30m entry/40m reset',async()=>{
+ code=await active();
+ await edit(code,s=>{s.phase='headstart';s.deadline=stamp()+300;for(const p of s.players)Object.assign(p,gps,{updated:stamp()});});
+ s=await action(1,code);assert.equal(s.hunter_nearby,null);
+ await edit(code,s=>s.phase='active');s=await action(1,code);assert.equal(s.hunter_nearby,true);assert.equal(s.hunters_clear,false);assert.equal(s.players[0].lat,null);
+ await edit(code,s=>s.players[0].lat=gps.lat+.00031);s=await action(1,code);assert.equal(s.hunter_nearby,false);assert.equal(s.hunters_clear,false);
+ await edit(code,s=>s.players[0].lat=gps.lat+.0005);s=await action(1,code);assert.equal(s.hunters_clear,true);
+ await edit(code,s=>s.players[0].updated=stamp()-31);s=await action(1,code);assert.equal(s.hunters_clear,false);
+ await action(0,code,'end');
+});
+await check('hunter teammates are live, runners cannot see hunter GPS or cached pings',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Hunter',code);await enter(2,'Runner',code);
+ await edit(code,s=>{s.phase='active';s.deadline=stamp()+300;for(const p of s.players)Object.assign(p,gps,{updated:stamp(),ping:{...gps,updated:stamp()}});s.players[0].role='hunter';s.players[1].role='hunter';});
+ s=await action(0,code);assert.equal(s.players[1].lat,gps.lat);assert.equal(s.players[1].location_kind,'live');
+ s=await action(2,code);assert.ok(s.players.filter(p=>p.role==='hunter').every(p=>p.lat===null&&!('ping' in p)));
  await action(0,code,'end');
 });
 console.log(`${count} database checks passed`);await db.close();
