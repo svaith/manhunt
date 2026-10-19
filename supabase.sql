@@ -51,48 +51,42 @@ begin
 end;
 $$;
 
--- Every client response hides hunter GPS from other players.
--- Hunters still receive their own location so they can orient on the map.
-create or replace function public.manhunt_snapshot(s jsonb, t double precision, viewer uuid)
-returns jsonb language sql immutable set search_path = '' as $$
- with viewer_player as (
-   select p
-   from jsonb_array_elements(s->'players') p
-   where p->>'id'=viewer::text
-   limit 1
- ),
- hunter_nearby as (
-   select exists(
-     select 1
-     from viewer_player v,
-          jsonb_array_elements(s->'players') h
-     where v.p->>'role'='runner'
-       and v.p->>'lat' is not null
-       and v.p->>'updated' is not null
-       and t-(v.p->>'updated')::float8 between 0 and 30
-       and coalesce((v.p->>'accuracy')::float8,9999)<=100
-       and h->>'role'='hunter'
-       and not coalesce((h->>'left')::boolean,false)
-       and h->>'lat' is not null
-       and h->>'updated' is not null
-       and t-(h->>'updated')::float8 between 0 and 30
-       and coalesce((h->>'accuracy')::float8,9999)<=100
-       and public.manhunt_distance(v.p,h)<=120
-   ) as value
- )
- select jsonb_set(s,'{players}',coalesce((
-   select jsonb_agg(
-     case when p->>'role'='hunter' and p->>'id'<>viewer::text then
-       p||'{"lat":null,"lng":null,"accuracy":null,"updated":null}'::jsonb
-     else p end
-     order by ord
-   )
-   from jsonb_array_elements(s->'players') with ordinality as players(p,ord)
- ), '[]'::jsonb))
- ||jsonb_build_object(
-   'server_now',t,
-   'hunter_nearby',coalesce((select value from hunter_nearby),false)
- );
+-- Viewer-specific locations. Raw GPS and cached runner pings never leak through.
+create or replace function public.manhunt_snapshot(s jsonb, t double precision)
+returns jsonb language plpgsql stable set search_path = '' as $$
+declare viewer jsonb; p jsonb; q jsonb; output jsonb:='[]'; near boolean:=false;
+ clear boolean:=true; valid boolean; ready boolean; live boolean;
+begin
+ select x into viewer from jsonb_array_elements(s->'players') x where x->>'id'=auth.uid()::text;
+ valid:=s->>'phase'='active' and viewer->>'role'='runner'
+   and viewer->>'lat' is not null and t-(viewer->>'updated')::float8<=15
+   and (viewer->>'accuracy')::float8<=30;
+ for p in select x from jsonb_array_elements(s->'players') x loop
+  if p->>'role'='hunter' and not coalesce((p->>'left')::boolean,false) then
+   if p->>'lat' is null or coalesce(t-(p->>'updated')::float8,999)>15 or coalesce((p->>'accuracy')::float8,999)>30 then clear:=false;
+   else
+    if valid and public.manhunt_distance(viewer,p)<=30 then near:=true;end if;
+    if valid and public.manhunt_distance(viewer,p)<=40 then clear:=false;end if;
+   end if;
+  end if;
+  ready:=p->>'lat' is not null and coalesce(t-(p->>'updated')::float8,999)<=30
+    and coalesce((p->>'accuracy')::float8,999)<=100
+    and public.manhunt_distance(p,s->'circle')<=(s->'circle'->>'radius')::float8+20;
+  live:=p->>'id'=auth.uid()::text or (viewer->>'role'='hunter' and p->>'role'='hunter');
+  q:=(p-'ping')||jsonb_build_object('ready',ready,'location_kind',case when live then 'live' else 'ping' end);
+  if not live then
+   q:=q||jsonb_build_object('lat',null,'lng',null,'accuracy',null,'updated',null);
+   if p->>'role'='runner' and p->'ping' is not null then q:=q||(p->'ping');end if;
+  end if;
+  if s->>'phase'='finished' or coalesce((p->>'left')::boolean,false) then
+   q:=q||'{"lat":null,"lng":null,"accuracy":null,"updated":null}'::jsonb;
+  end if;
+  output:=output||jsonb_build_array(q);
+ end loop;
+ return jsonb_set(s,'{players}',output)||jsonb_build_object('server_now',t,
+   'hunter_nearby',case when valid then near else null end,
+   'hunters_clear',valid and clear);
+end;
 $$;
 
 create or replace function public.manhunt_enter(p_name text,p_code text default null)
@@ -116,7 +110,7 @@ begin
    if not found then raise exception 'Room not found or expired';end if;
    s:=r.state;
    if exists(select 1 from jsonb_array_elements(s->'players') x where x->>'id'=u::text and not coalesce((x->>'left')::boolean,false)) then
-     return public.manhunt_snapshot(s,t,u);
+     return public.manhunt_snapshot(s,t);
    end if;
    if s->>'phase'<>'lobby' then raise exception 'This game has already started or ended';end if;
    if jsonb_array_length(s->'players')>=15 then raise exception 'This room is full (15 players)';end if;
@@ -124,7 +118,7 @@ begin
    s:=jsonb_set(s,'{players}',(s->'players')||jsonb_build_array(p));
    update public.manhunt_rooms set state=s where code=c;
  end if;
- return public.manhunt_snapshot(s,t,u);
+ return public.manhunt_snapshot(s,t);
 end;
 $$;
 
@@ -190,6 +184,9 @@ begin
    if lat is null or lng is null or accuracy is null or not(lat between -90 and 90) or not(lng between -180 and 180) or not(accuracy between 0 and 10000) then raise exception 'Invalid GPS sample';end if;
    p:=players->idx;
    p:=p||jsonb_build_object('lat',lat,'lng',lng,'accuracy',accuracy,'updated',t);
+   if p->>'role'='runner' and (p->'ping' is null or p->'ping'='null'::jsonb or t-coalesce((p->'ping'->>'updated')::float8,0)>=120) then
+    p:=p||jsonb_build_object('ping',jsonb_build_object('lat',lat,'lng',lng,'accuracy',accuracy,'updated',t));
+   end if;
    if p->>'role'='runner' and p->>'pending_until' is not null and accuracy<=100 then
      if public.manhunt_distance(p,p->'pending_circle')>(p->'pending_circle'->>'radius')::float8+20 then p:=p||'{"role":"hunter","reason":"Outside the circle"}'::jsonb;end if;
      p:=p||'{"pending_until":null,"pending_circle":null}'::jsonb;
@@ -211,6 +208,10 @@ begin
    for i in 0..n-1 loop
      if players->i->>'id'=any(chosen) then players:=jsonb_set(players,array[i::text,'role'],'"hunter"');end if;
    end loop;
+   for i in 0..n-1 loop
+    p:=players->i;
+    players:=jsonb_set(players,array[i::text],p||jsonb_build_object('ping',case when p->>'role'='runner' then jsonb_build_object('lat',p->'lat','lng',p->'lng','accuracy',p->'accuracy','updated',p->'updated') else null end));
+   end loop;
    s:=s||jsonb_build_object('phase','headstart','round',0,'deadline',t+300);
  elsif p_action='tag' then
    if s->>'phase' not in ('headstart','active') then raise exception 'No active game';end if;
@@ -222,21 +223,21 @@ begin
    if u=r.host then
      s:=s||'{"phase":"finished","deadline":null,"end_reason":"The host left the room."}'::jsonb;
    elsif s->>'phase'='lobby' then players:=players-idx;
-   else players:=jsonb_set(players,array[idx::text],(players->idx)||'{"left":true,"role":"hunter","reason":"Left game","lat":null,"lng":null,"updated":null,"pending_until":null,"pending_circle":null}'::jsonb);
+   else players:=jsonb_set(players,array[idx::text],(players->idx)||'{"left":true,"ping":null,"role":"hunter","reason":"Left game","lat":null,"lng":null,"updated":null,"pending_until":null,"pending_circle":null}'::jsonb);
    end if;
  end if;
  if s->>'phase' in ('headstart','active') and not exists(select 1 from jsonb_array_elements(players) x where x->>'role'='runner' and not coalesce((x->>'left')::boolean,false)) then
    s:=s||'{"phase":"finished","deadline":null,"end_reason":"Everyone was infected. Good hunt."}'::jsonb;
  end if;
  if s->>'phase'='finished' then
-   select coalesce(jsonb_agg(x||'{"lat":null,"lng":null,"accuracy":null,"updated":null,"pending_until":null,"pending_circle":null}'::jsonb),'[]') into players from jsonb_array_elements(players) x;
+   select coalesce(jsonb_agg(x||'{"lat":null,"lng":null,"accuracy":null,"updated":null,"ping":null,"pending_until":null,"pending_circle":null}'::jsonb),'[]') into players from jsonb_array_elements(players) x;
  end if;
  s:=jsonb_set(s,'{players}',players);
  update public.manhunt_rooms set state=s where code=r.code;
- return public.manhunt_snapshot(s,t,u);
+ return public.manhunt_snapshot(s,t);
 end;
 $$;
-revoke all on function public.manhunt_snapshot(jsonb,double precision,uuid) from public, anon, authenticated;
+revoke all on function public.manhunt_snapshot(jsonb,double precision) from public, anon, authenticated;
 revoke all on function public.manhunt_distance(jsonb,jsonb) from public, anon, authenticated;
 revoke all on function public.manhunt_on_campus(jsonb) from public, anon, authenticated;
 revoke all on function public.manhunt_next(jsonb) from public, anon, authenticated;
