@@ -3,6 +3,7 @@ import {CAMPUS, fresh, outside, formatTime, demoState, advanceDemo} from './game
 const $=id=>document.getElementById(id);
 let client,uid,state,map,circle,next,markers=new Map(),demo=false,joinMode=false,busy=false,polling=false,watch=null,position=null,lastUpload=0,offset=0,lastSuccess=0,timerHandle,pollHandle,wakeLock;
 let heading=null,headingAt=0,compassOn=false,nearLatch=false;
+let selectedHunters=new Set(),previousRoles=null,previousPhase=null;
 let savedCode=localStorage.getItem('manhunt-room')||'';
 const cfg=window.MANHUNT_CONFIG||{};
 const configured=Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey);
@@ -36,7 +37,7 @@ function openGame(){
     if(!window.L){toast('Map library could not load. Check your connection and reload.');}
     else{map=L.map('map',{zoomControl:true}).setView([CAMPUS.lat,CAMPUS.lng],15);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);circle=L.circle([CAMPUS.lat,CAMPUS.lng],{radius:CAMPUS.radius,color:'#608c23',fillColor:'#b8da71',fillOpacity:.12,weight:2}).addTo(map);next=L.circle([CAMPUS.lat,CAMPUS.lng],{radius:0,color:'#986600',fillOpacity:.04,dashArray:'8 8',weight:2}).addTo(map);}
   }
-  nearLatch=false;$('nearby-alert').hidden=true;lastSuccess=Date.now();render();setTimeout(()=>{map?.invalidateSize();fitMap();},50);
+  previousRoles=null;previousPhase=null;selectedHunters.clear();nearLatch=false;$('nearby-alert').hidden=true;lastSuccess=Date.now();render();setTimeout(()=>{map?.invalidateSize();fitMap();},50);
   clearInterval(pollHandle);pollHandle=setInterval(sync,3000);
   requestWake();
 }
@@ -63,7 +64,7 @@ function finishDemo(){state.phase='finished';state.deadline=null;for(const p of 
 function confirmAction(title,description){return new Promise(resolve=>{$('confirm-title').textContent=title;$('confirm-description').textContent=description;const d=$('confirm-dialog');d.returnValue='cancel';d.onclose=()=>resolve(d.returnValue==='confirm');d.showModal();});}
 $('tag-button').onclick=()=>guarded(async()=>{if(await confirmAction('You got tagged?','You’ll become a hunter for the rest of this game. Go find the remaining runners.'))await action('tag');});
 $('end-button').onclick=()=>guarded(async()=>{if(await confirmAction('End this game?','This ends the game for everyone and clears all player locations.'))await action('end');});
-$('start-button').onclick=()=>guarded(()=>action('start',{hunters:Number($('hunter-select').value)}));
+$('start-button').onclick=()=>guarded(()=>action('start',{hunters:Number($('hunter-select').value),selection:$('hunter-mode').value,hunter_ids:[...selectedHunters]}));
 $('advance-demo').onclick=()=>{advanceDemo(state,now());render();fitMap();};
 $('copy-room').onclick=()=>guarded(async()=>{if(demo){toast('This is a demo. Create a real room to invite friends.');return;}const url=new URL(location.href);url.search='';url.searchParams.set('room',state.code);try{await navigator.clipboard.writeText(url.href);toast('Invite link copied.');}catch{toast(`Room code: ${state.code}`);}});
 $('leave-button').onclick=()=>guarded(async()=>{
@@ -88,6 +89,7 @@ $('location-button').onclick=()=>{
 };
 function render(){
   if(!state)return;
+  announceCatches();
   const me=state.players.find(p=>p.id===uid), host=state.host===uid,finished=state.phase==='finished',lobby=state.phase==='lobby';
   const runners=state.players.filter(p=>p.role==='runner'&&!p.left).length,hunters=state.players.filter(p=>p.role==='hunter'&&!p.left).length;
   $('copy-room').textContent=state.code+' ⧉';$('player-count').textContent=`${state.players.filter(p=>!p.left).length} / 15`;
@@ -95,7 +97,17 @@ function render(){
   $('host-controls').hidden=!host||!lobby;$('end-button').hidden=!host||finished;
   const options=Math.max(1,state.players.filter(p=>!p.left).length-1);const selected=$('hunter-select').value||'1';
   if($('hunter-select').options.length!==options){$('hunter-select').replaceChildren(...Array.from({length:options},(_,i)=>new Option(String(i+1),String(i+1))));$('hunter-select').value=String(Math.min(Number(selected),options));}
-  $('start-button').disabled=state.players.filter(p=>!p.left).length<2||!state.players.filter(p=>!p.left).every(p=>(demo?fresh(p,now())&&p.accuracy<=100&&!outside(p,CAMPUS):p.ready));
+  const manual=$('hunter-mode').value==='manual';
+  selectedHunters=new Set([...selectedHunters].filter(id=>state.players.some(p=>p.id===id&&!p.left)));
+  $('hunter-picks').hidden=!manual;
+  $('hunter-options').replaceChildren(...state.players.filter(p=>!p.left).map(p=>{
+    const label=document.createElement('label'),input=document.createElement('input');
+    label.className='hunter-choice';input.type='checkbox';input.checked=selectedHunters.has(p.id);
+    input.onchange=()=>{if(input.checked)selectedHunters.add(p.id);else selectedHunters.delete(p.id);render();};
+    label.append(input,document.createTextNode(p.name+(p.id===uid?' (you)':'')));return label;
+  }));
+  $('hunter-selection-status').textContent=`${selectedHunters.size} of ${$('hunter-select').value} hunters selected`;
+  $('start-button').disabled=(manual&&selectedHunters.size!==Number($('hunter-select').value))||state.players.filter(p=>!p.left).length<2||!state.players.filter(p=>!p.left).every(p=>(demo?fresh(p,now())&&p.accuracy<=100&&!outside(p,CAMPUS):p.ready));
   $('my-role').textContent=finished?'Hunt complete':lobby?'In the lobby':me?.role==='hunter'?'You’re a hunter':'You’re a runner';
   $('my-role').style.color=me?.role==='hunter'&&!finished?'var(--red)':'var(--text)';
   $('role-note').textContent=finished?(state.end_reason||'Everyone was infected. Good hunt.') :lobby?'Enable your location. The host starts when everyone is ready.':me?.role==='hunter'?(state.phase==='headstart'?'Let the runners go. The hunt begins when the timer ends.':'Find the runners. Once tagged, they join your team.'):'Stay inside the circle. When tagged, tap the button below.';
@@ -191,4 +203,17 @@ function updatePingCountdown(){
   note=remaining<=0?'Ping due · waiting for fresh GPS':'Next runner update · individual pings may differ';
  }
  $('ping-countdown').textContent=label;$('ping-note').textContent=note;
+}
+
+$('hunter-mode').onchange=()=>render();
+$('hunter-select').onchange=()=>render();
+function announceCatches(){
+ if(previousRoles&&['headstart','active'].includes(previousPhase)){
+  const changed=state.players.filter(p=>!p.left&&p.role==='hunter'&&previousRoles.get(p.id)==='runner');
+  if(changed.length){
+   const messages=changed.map(p=>p.reason==='Outside the circle'?`${p.name} left the zone and became a hunter.`:p.reason==='Location disconnected'?`${p.name} lost location and became a hunter.`:`${p.name} got caught! They’re now a hunter.`);
+   toast(messages.join(' '));
+  }
+ }
+ previousRoles=new Map(state.players.map(p=>[p.id,p.role]));previousPhase=state.phase;
 }

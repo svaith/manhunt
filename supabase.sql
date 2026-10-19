@@ -204,7 +204,15 @@ begin
      if p->>'lat' is null or p->>'updated' is null or t-(p->>'updated')::float8>30 or coalesce((p->>'accuracy')::float8,9999)>100 then raise exception 'Everyone needs a fresh GPS fix (within 100 m accuracy)';end if;
      if public.manhunt_distance(p,campus)>820 then raise exception 'Everyone must be inside the starting circle';end if;
    end loop;
-   select array_agg(x->>'id') into chosen from (select x from jsonb_array_elements(players) x order by random() limit h) shuffled;
+   if coalesce(p_payload->>'selection','random') not in ('random','manual') then raise exception 'Invalid hunter selection mode';end if;
+   if p_payload->>'selection'='manual' then
+    if jsonb_typeof(p_payload->'hunter_ids') is distinct from 'array' then raise exception 'Choose your hunters';end if;
+    select array_agg(value) into chosen from jsonb_array_elements_text(p_payload->'hunter_ids');
+    if coalesce(cardinality(chosen),0)<>h or (select count(distinct x) from unnest(chosen) x)<>h then raise exception 'Select exactly % different hunters',h;end if;
+    if exists(select 1 from unnest(chosen) x where not exists(select 1 from jsonb_array_elements(players) candidate_player where candidate_player->>'id'=x and not coalesce((candidate_player->>'left')::boolean,false))) then raise exception 'Selected hunter is not in this lobby';end if;
+   else
+    select array_agg(x->>'id') into chosen from (select x from jsonb_array_elements(players) x order by random() limit h) shuffled;
+   end if;
    for i in 0..n-1 loop
      if players->i->>'id'=any(chosen) then players:=jsonb_set(players,array[i::text,'role'],'"hunter"');end if;
    end loop;

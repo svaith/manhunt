@@ -53,7 +53,7 @@ Play only where you are permitted to go. Circle geometry does not know whether a
 
 ## Test before playing
 
-`npm test` runs seven dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 21 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
+`npm test` runs seven dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 22 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
 
 Before relying on a real game, test with two or more phones on your deployment:
 
@@ -63,7 +63,7 @@ Before relying on a real game, test with two or more phones on your deployment:
 4. Wait through the head start and first shrink. Verify the new circle matches the preview and test the stale-location grace period with a spare device.
 5. Press **I got tagged**, then end the game and verify all location markers disappear.
 
-Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All seven browser-logic tests and 21 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
+Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All seven browser-logic tests and 22 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
 
 ## Files
 
@@ -92,3 +92,7 @@ Run the updated `supabase.sql` again to replace the game functions, then create 
 - During the active hunt only, runners see **Hunter nearby!** when a hunter is within 30 meters. Both fixes must be at most 15 seconds old with reported accuracy within 30 meters. Unknown/stale data never counts as clear. The warning fires once, then rearms only once all hunters are beyond 40 meters (a drift buffer). Dismiss hides the warning without rearming.
 - Vibration is attempted where supported and can be toggled off. iPhone Safari generally does not support web vibration, so the visual alert is the reliable fallback. Alerts require the page to stay open; these are not background push notifications. GPS estimates can still miss or falsely trigger a 30-meter warning.
 - Upgrade the database with the latest `supabase.sql` before deploying this frontend. Start a new room and have everyone reload for V2. Existing cached pings are initialized as players upload fresh fixes.
+
+## Catch announcements and hunter selection
+
+Hosts can pick hunters randomly or select exactly the chosen number from the lobby. The server validates membership, uniqueness and count. Everyone with the game open gets a catch announcement when a runner becomes a hunter; zone and location forfeits have distinct messages. Initial assignments and reconnecting do not replay catch announcements. These are in-page notices, not background phone push notifications.
