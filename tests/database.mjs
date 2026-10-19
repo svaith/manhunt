@@ -80,4 +80,14 @@ await check('hunter teammates are live, runners cannot see hunter GPS or cached 
  s=await action(2,code);assert.ok(s.players.filter(p=>p.role==='hunter').every(p=>p.lat===null&&!('ping' in p)));
  await action(0,code,'end');
 });
+await check('host can choose exact hunters and invalid selections are rejected',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Player',code);await enter(2,'Player 2',code);
+ for(const i of [0,1,2])await action(i,code,'poll',gps);
+ await assert.rejects(()=>action(0,code,'start',{hunters:2,selection:'manual',hunter_ids:[ids[1],ids[1]]}),/different hunters/);
+ await assert.rejects(()=>action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:['outsider']}),/not in this lobby/);
+ await assert.rejects(()=>action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[]}),/different hunters/);
+ s=await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[1]]});
+ assert.equal(s.players.find(p=>p.id===ids[1]).role,'hunter');assert.equal(s.players.find(p=>p.id===ids[0]).role,'runner');
+ await action(0,code,'end');
+});
 console.log(`${count} database checks passed`);await db.close();
