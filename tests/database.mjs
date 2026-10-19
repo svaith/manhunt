@@ -20,13 +20,19 @@ await check('start requires GPS',async()=>{await assert.rejects(()=>action(0,cod
 const gps={lat:38.9897,lng:-76.9436,accuracy:10};
 await action(0,code,'poll',gps);await action(1,code,'poll',gps);
 await check('random assignment and headstart',async()=>{s=await action(0,code,'start',{hunters:1});assert.equal(s.phase,'headstart');assert.equal(s.players.filter(p=>p.role==='hunter').length,1);assert.equal(s.deadline-s.server_now,300);});
-await check('hunter coordinates hidden in polls and reconnects for every player',async()=>{
+await check('hunters only see their own coordinates; others still hidden',async()=>{
  for(const i of [0,1]){
   for(const snapshot of [await action(i,code,'poll',gps),await enter(i,'Reconnect',code)]){
+   const meId=ids[i];
    const hunter=snapshot.players.find(p=>p.role==='hunter');
-   assert.equal(hunter.lat,null);assert.equal(hunter.lng,null);
-   assert.equal(hunter.accuracy,null);assert.equal(hunter.updated,null);
    const runner=snapshot.players.find(p=>p.role==='runner');
+   if(hunter.id===meId){
+    assert.notEqual(hunter.lat,null);assert.notEqual(hunter.lng,null);
+    assert.notEqual(hunter.accuracy,null);assert.notEqual(hunter.updated,null);
+   }else{
+    assert.equal(hunter.lat,null);assert.equal(hunter.lng,null);
+    assert.equal(hunter.accuracy,null);assert.equal(hunter.updated,null);
+   }
    assert.equal(runner.lat,gps.lat);assert.equal(runner.lng,gps.lng);
   }
  }
@@ -46,6 +52,20 @@ code=await active();
 await check('leave forfeits and clears location',async()=>{s=await action(1,code,'leave');assert.equal(s.players[1].left,true);assert.equal(s.players[1].lat,null);assert.equal(s.phase,'finished');});
 code=await active();
 await check('host leave ends room',async()=>{s=await action(0,code,'leave');assert.equal(s.phase,'finished');});
+code=await active();
+await check('runner gets hunter proximity alerts without hunter coordinates',async()=>{
+ await edit(code,s=>{
+  const hunter=s.players[0],runner=s.players[1];
+  hunter.role='hunter';runner.role='runner';
+  hunter.lat=38.9898;hunter.lng=-76.9436;hunter.updated=stamp()-1;hunter.accuracy=10;
+  runner.lat=38.98975;runner.lng=-76.94358;runner.updated=stamp()-1;runner.accuracy=10;
+ });
+ const runnerView=await action(1,code,'poll',gps);
+ const hunterView=await action(0,code,'poll',gps);
+ assert.equal(runnerView.hunter_nearby,true);
+ assert.equal(runnerView.players.find(p=>p.role==='hunter').lat,null);
+ assert.equal(hunterView.hunter_nearby,false);
+});
 await check('expired room ends and clears locations',async()=>{s=await enter(0,'Host');code=s.code;await db.query("update public.manhunt_rooms set expires_at=now()-interval '1 second' where code=$1",[code]);s=await action(0,code);assert.equal(s.phase,'finished');});
 await check('starting circle rejects an outside start',async()=>{
  s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
@@ -55,4 +75,3 @@ await check('starting circle rejects an outside start',async()=>{
  await action(0,code,'end');
 });
 console.log(`${count} database checks passed`);await db.close();
-
