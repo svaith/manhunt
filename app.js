@@ -129,7 +129,7 @@ function render(){
   updateClock();
 }
 function updateClock(){
-  if(!state)return;if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
+  if(!state)return;updatePingCountdown();if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
   $('phase-label').textContent={lobby:'WAITING ROOM',headstart:'RUNNERS’ HEAD START',active:'NEXT CIRCLE IN',finished:'GAME OVER'}[phase];
   $('round-label').textContent=phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
@@ -176,3 +176,19 @@ function updateProximity(){
  $('proximity-status').textContent=!active?'Nearby alerts start when the hunt begins.':state.hunter_nearby==null?'Nearby alerts waiting for fresh, accurate GPS.':'Nearby alerts active · GPS estimates only';
 }
 $('dismiss-nearby').onclick=()=>$('nearby-alert').hidden=true;
+
+function updatePingCountdown(){
+ const runners=state.players.filter(p=>p.role==='runner'&&p.id!==uid&&!p.left);
+ const active=state.phase!=='finished';
+ if(demo&&active){for(const p of runners)if(p.updated!=null&&now()-p.updated>=120)p.updated=now();}
+ const known=runners.filter(p=>p.updated!=null&&p.lat!=null);
+ let label='--:--',note='No other runners to ping';
+ if(!active)note='Game finished';
+ else if(runners.length&&known.length===0)note='Waiting for runner GPS';
+ else if(known.length){
+  const remaining=Math.min(...known.map(p=>p.updated+120-now()));
+  label=formatTime(remaining);
+  note=remaining<=0?'Ping due · waiting for fresh GPS':'Next runner update · individual pings may differ';
+ }
+ $('ping-countdown').textContent=label;$('ping-note').textContent=note;
+}
