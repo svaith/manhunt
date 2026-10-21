@@ -1,9 +1,10 @@
 import {compassHeading, proximityTransition} from './v2.js';
-import {CAMPUS, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
+import {spawnPowerup, collectDemoPowerup, activateDemoReveal, revealActive, RUNNER_PING_SECONDS, CAMPUS, ZONE_DESTINATIONS, nextCircle, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
 const $=id=>document.getElementById(id);
 let client,uid,state,map,circle,next,markers=new Map(),demo=false,joinMode=false,busy=false,polling=false,watch=null,position=null,lastUpload=0,offset=0,lastSuccess=0,timerHandle,pollHandle,wakeLock;
 let heading=null,headingAt=0,compassOn=false,nearLatch=false;
 let selectedHunters=new Set(),previousRoles=null,previousPhase=null;
+let powerupMarker=null,powerupRing=null,previousInventory=null,wasRevealing=false;
 let savedCode=localStorage.getItem('manhunt-room')||'';
 const cfg=window.MANHUNT_CONFIG||{};
 const configured=Boolean(cfg.supabaseUrl&&cfg.supabasePublishableKey);
@@ -37,7 +38,7 @@ function openGame(){
     if(!window.L){toast('Map library could not load. Check your connection and reload.');}
     else{map=L.map('map',{zoomControl:true}).setView([CAMPUS.lat,CAMPUS.lng],15);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);circle=L.circle([CAMPUS.lat,CAMPUS.lng],{radius:CAMPUS.radius,color:'#608c23',fillColor:'#b8da71',fillOpacity:.12,weight:2}).addTo(map);next=L.circle([CAMPUS.lat,CAMPUS.lng],{radius:0,color:'#986600',fillOpacity:.04,dashArray:'8 8',weight:2}).addTo(map);}
   }
-  previousRoles=null;previousPhase=null;selectedHunters.clear();nearLatch=false;$('nearby-alert').hidden=true;lastSuccess=Date.now();render();setTimeout(()=>{map?.invalidateSize();fitMap();},50);
+  previousRoles=null;previousPhase=null;previousInventory=null;wasRevealing=false;selectedHunters.clear();nearLatch=false;$('nearby-alert').hidden=true;lastSuccess=Date.now();render();setTimeout(()=>{map?.invalidateSize();fitMap();},50);
   clearInterval(pollHandle);pollHandle=setInterval(sync,3000);
   requestWake();
 }
@@ -48,7 +49,7 @@ async function sync(action='poll',extra={}){
   try{
     const payload={...extra};
     if(position&&Date.now()-position.captured<15000&&Date.now()-lastUpload>=4000&&state.phase!=='finished'){
-      const {lat,lng,accuracy}=position;Object.assign(payload,{lat,lng,accuracy});lastUpload=Date.now();
+      const {lat,lng,accuracy}=position;Object.assign(payload,{lat,lng,accuracy,captured_at:position.captured/1000});lastUpload=Date.now();
     }
     const data=await rpc('manhunt_action',{p_code:state.code,p_action:action,p_payload:payload});
     state=data;lastSuccess=Date.now();$('connection').hidden=true;render();
@@ -56,16 +57,26 @@ async function sync(action='poll',extra={}){
   finally{polling=false;}
 }
 async function action(type,extra={}){
-  if(demo){if(type==='tag'){const p=state.players.find(p=>p.id===uid);p.role='hunter';p.reason='Tagged';if(state.players.every(p=>p.role==='hunter'))finishDemo();}if(type==='end')finishDemo();render();return;}
+  if(demo){if(type==='tag'){const p=state.players.find(p=>p.id===uid);p.caught_at??=now();p.role='hunter';p.reason='Tagged';p.powerups=0;p.reveal_until=null;if(state.players.every(p=>p.role==='hunter'))finishDemo();}if(type==='end')finishDemo();if(type==='reveal')activateDemoReveal(state,uid,now());render();return;}
   if(polling){toast('Syncing — try again in a moment.');return;}
   await sync(type,extra);
 }
-function finishDemo(){state.phase='finished';state.deadline=null;for(const p of state.players){p.lat=null;p.lng=null;p.updated=null;}}
+function finishDemo(){state.ended_at??=now();state.powerup=null;state.phase='finished';state.deadline=null;for(const p of state.players){p.lat=null;p.lng=null;p.updated=null;p.powerups=0;p.reveal_until=null;}}
 function confirmAction(title,description){return new Promise(resolve=>{$('confirm-title').textContent=title;$('confirm-description').textContent=description;const d=$('confirm-dialog');d.returnValue='cancel';d.onclose=()=>resolve(d.returnValue==='confirm');d.showModal();});}
 $('tag-button').onclick=()=>guarded(async()=>{if(await confirmAction('You got tagged?','You’ll become a hunter for the rest of this game. Go find the remaining runners.'))await action('tag');});
 $('end-button').onclick=()=>guarded(async()=>{if(await confirmAction('End this game?','This ends the game for everyone and clears all player locations.'))await action('end');});
 $('start-button').onclick=()=>guarded(()=>action('start',{hunters:Number($('hunter-select').value),selection:$('hunter-mode').value,hunter_ids:[...selectedHunters]}));
-$('advance-demo').onclick=()=>{advanceDemo(state,now());render();fitMap();};
+$('advance-demo').onclick=()=>{
+ if(state.phase==='finished')return;
+ offset+=Math.max(0,(state.deadline||now())-now());
+ if($('demo-zone').value==='random')advanceDemo(state,now());
+ else{
+  if(state.phase==='headstart'){state.phase='active';state.round=1;}
+  else{state.circle=state.next;state.next=nextCircle(state.circle);state.round++;state.powerup=spawnPowerup(state.circle,state.round,now());}
+  state.deadline=now()+300;
+ }
+ render();fitMap();
+};
 $('copy-room').onclick=()=>guarded(async()=>{if(demo){toast('This is a demo. Create a real room to invite friends.');return;}const url=new URL(location.href);url.search='';url.searchParams.set('room',state.code);try{await navigator.clipboard.writeText(url.href);toast('Invite link copied.');}catch{toast(`Room code: ${state.code}`);}});
 $('leave-button').onclick=()=>guarded(async()=>{
   if(!await confirmAction('Leave the room?',state.host===uid&&state.phase!=='finished'?'As host, leaving ends the room and clears everyone’s locations.':'Your location will be cleared. Leaving an active game forfeits your runner role.'))return;
@@ -92,6 +103,7 @@ function render(){
   announceCatches();
   const me=state.players.find(p=>p.id===uid), host=state.host===uid,finished=state.phase==='finished',lobby=state.phase==='lobby';
   const runners=state.players.filter(p=>p.role==='runner'&&!p.left).length,hunters=state.players.filter(p=>p.role==='hunter'&&!p.left).length;
+  $('advance-demo').disabled=finished;$('demo-results').disabled=finished;
   $('copy-room').textContent=state.code+' ⧉';$('player-count').textContent=`${state.players.filter(p=>!p.left).length} / 15`;
   $('runner-count').textContent=runners;$('hunter-count').textContent=hunters;
   $('host-controls').hidden=!host||!lobby;$('end-button').hidden=!host||finished;
@@ -112,36 +124,45 @@ function render(){
   $('my-role').style.color=me?.role==='hunter'&&!finished?'var(--red)':'var(--text)';
   $('role-note').textContent=finished?(state.end_reason||'Everyone was infected. Good hunt.') :lobby?'Enable your location. The host starts when everyone is ready.':me?.role==='hunter'?(state.phase==='headstart'?'Let the runners go. The hunt begins when the timer ends.':'Find the runners. Once tagged, they join your team.'):'Stay inside the circle. When tagged, tap the button below.';
   $('tag-button').hidden=lobby||finished||me?.role!=='runner';$('location-button').hidden=finished;$('compass-button').hidden=finished;
-  updateProximity();
+  updateProximity();updatePowerups();renderStats();
   if(demo)$('location-status').textContent='Simulated locations · demo only';
   if(finished){stopTracking();$('location-status').textContent='Locations cleared. Tracking stopped.';wakeLock?.release();}
   $('players').replaceChildren(...state.players.filter(p=>!p.left).map(p=>{
     const li=document.createElement('li'),av=document.createElement('span'),name=document.createElement('span'),sub=document.createElement('small'),badge=document.createElement('span');
     av.className='avatar'+(p.role==='hunter'?' infected':'');av.textContent=p.name.slice(0,2).toUpperCase();name.className='player-name';name.textContent=p.name+(p.id===uid?' (you)':'');
-    sub.textContent=finished?(p.reason||''):p.role==='hunter'&&me?.role!=='hunter'?'Location hidden':p.lat==null?(p.role==='hunter'?'Location hidden':'Waiting for GPS'):p.id===uid||p.location_kind==='live'?'Live GPS':`Last seen ${Math.max(0,Math.floor(now()-p.updated))}s ago`;name.append(sub);
+    sub.textContent=finished?(p.reason||''):p.role==='hunter'&&me?.role!=='hunter'&&!revealActive(state,uid,now())?'Location hidden':p.lat==null?(p.role==='hunter'?'Location hidden':'Waiting for GPS'):p.id===uid||p.location_kind==='live'?'Live GPS':`Last seen ${Math.max(0,Math.floor(now()-p.updated))}s ago`;name.append(sub);
     badge.className='badge'+(p.role==='hunter'?' infected':'');badge.textContent=lobby?'Ready?':p.role;li.append(av,name,badge);return li;
   }));
   if(map){
     circle.setLatLng([state.circle.lat,state.circle.lng]).setRadius(state.circle.radius);
     next.setLatLng([state.next.lat,state.next.lng]).setRadius(lobby||finished?0:state.next.radius);
+    powerupMarker?.remove();powerupRing?.remove();powerupMarker=null;powerupRing=null;
+    if(state.powerup&&state.phase==='active'){
+      const item=state.powerup;
+      powerupRing=L.circle([item.lat,item.lng],{radius:20,color:'#e5a925',fillColor:'#ffca49',fillOpacity:.35,weight:2}).addTo(map);
+      powerupMarker=L.marker([item.lat,item.lng],{icon:L.divIcon({className:'',iconSize:[32,32],iconAnchor:[16,16],html:'<div class="powerup-pin">⚡</div>'})}).bindTooltip('Hunter reveal pickup · 20m · first runner collects').addTo(map);
+    }
     const visible=new Set();
     for(const entry of state.players){
       const p=entry.id===uid&&position&&Date.now()-position.captured<15000?{...entry,...position,updated:now()}:entry;
-      if((p.role==='hunter'&&me?.role!=='hunter'&&p.id!==uid)||p.lat==null||p.left||finished)continue;visible.add(p.id);
+      if((p.role==='hunter'&&me?.role!=='hunter'&&p.id!==uid&&!revealActive(state,uid,now()))||p.lat==null||p.left||finished)continue;visible.add(p.id);
       const icon=L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:`<div class="player-marker ${p.role==='hunter'?'infected':''} ${p.location_kind==='ping'&&p.id!==uid?'ping-marker':fresh(p,now())?'':'stale'}"></div>`});
       let marker=markers.get(p.id);if(!marker){marker=L.marker([p.lat,p.lng]).addTo(map);markers.set(p.id,marker);}marker.setLatLng([p.lat,p.lng]).setIcon(icon);
       marker.getElement()?.querySelector('.player-marker')?.append(document.createTextNode(p.name.slice(0,2).toUpperCase()));
       if(p.id===uid&&heading!=null&&Date.now()-headingAt<10000){const arrow=document.createElement('span');arrow.className='heading-arrow';arrow.style.transform=`rotate(${heading}deg)`;marker.getElement()?.querySelector('.player-marker')?.append(arrow);}
-      if(p.location_kind==='ping'&&p.id!==uid)marker.setOpacity(Math.max(.4,1-(now()-p.updated)/240));else marker.setOpacity(1);
+      if(p.location_kind==='ping'&&p.id!==uid)marker.setOpacity(Math.max(.4,1-(now()-p.updated)/(RUNNER_PING_SECONDS*2)));else marker.setOpacity(1);
       const label=document.createElement('span');label.textContent=`${p.name} · ${p.role}${p.id!==uid&&p.location_kind==='ping'?` · last seen ${Math.max(0,Math.floor(now()-p.updated))}s ago`:fresh(p,now())?' · live':' · stale'}`;marker.unbindTooltip().bindTooltip(label,{direction:'top',offset:[0,-18]});
     }
     for(const [id,marker]of markers){if(!visible.has(id)){marker.remove();markers.delete(id);}}
   }
-  $('location-rule').textContent=me?.role==='hunter'?'Hunters live · runners ping every 2 min':'Only you live · runners ping every 2 min';
+  $('location-rule').textContent=me?.role==='hunter'?'Hunters live · runners ping every 1 min':revealActive(state,uid,now())?'Reveal active · hunters live':'Only you live · runners ping every 1 min';
   updateClock();
 }
 function updateClock(){
-  if(!state)return;updatePingCountdown();if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
+  if(!state)return;updatePowerups();
+  const revealing=revealActive(state,uid,now());
+  if(revealing!==wasRevealing){wasRevealing=revealing;render();return;}
+  updatePingCountdown();if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
   $('phase-label').textContent={lobby:'WAITING ROOM',headstart:'RUNNERS’ HEAD START',active:'NEXT CIRCLE IN',finished:'GAME OVER'}[phase];
   $('round-label').textContent=phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
@@ -192,13 +213,13 @@ $('dismiss-nearby').onclick=()=>$('nearby-alert').hidden=true;
 function updatePingCountdown(){
  const runners=state.players.filter(p=>p.role==='runner'&&p.id!==uid&&!p.left);
  const active=state.phase!=='finished';
- if(demo&&active){for(const p of runners)if(p.updated!=null&&now()-p.updated>=120)p.updated=now();}
+ if(demo&&active){for(const p of runners)if(p.updated!=null&&now()-p.updated>=RUNNER_PING_SECONDS)p.updated=now();}
  const known=runners.filter(p=>p.updated!=null&&p.lat!=null);
  let label='--:--',note='No other runners to ping';
  if(!active)note='Game finished';
  else if(runners.length&&known.length===0)note='Waiting for runner GPS';
  else if(known.length){
-  const remaining=Math.min(...known.map(p=>p.updated+120-now()));
+  const remaining=Math.min(...known.map(p=>p.updated+RUNNER_PING_SECONDS-now()));
   label=formatTime(remaining);
   note=remaining<=0?'Ping due · waiting for fresh GPS':'Next runner update · individual pings may differ';
  }
@@ -217,3 +238,69 @@ function announceCatches(){
  }
  previousRoles=new Map(state.players.map(p=>[p.id,p.role]));previousPhase=state.phase;
 }
+
+$('demo-zone').onchange=()=>{
+ if(!demo)return;
+ $('demo-banner').querySelector('span').textContent=$('demo-zone').value==='random'?'DEMO · Simulated players and locations. Nothing is shared.':'ZONE ROUTE PREVIEW · Players stay put so you can inspect every circle.';
+ state=demoState(now());
+ for(const p of state.players)p.location_kind=p.id==='me'||p.role==='hunter'?'live':'ping';
+ if($('demo-zone').value!=='random'){
+  state.next=nextCircle({...CAMPUS,target:ZONE_DESTINATIONS[Number($('demo-zone').value)]});
+ }
+ previousRoles=null;previousPhase=null;previousInventory=null;wasRevealing=false;render();fitMap();
+};
+
+function updatePowerups(){
+ const me=state.players.find(p=>p.id===uid),active=state.phase==='active',count=me?.powerups||0;
+ const seconds=Math.max(0,(me?.reveal_until||0)-now());
+ if(previousInventory!=null&&count>previousInventory)toast('Power-up collected! Stored in your inventory.');
+ previousInventory=count;
+ $('powerup-count').textContent=count;
+ $('reveal-button').disabled=!active||me?.role!=='runner'||count<1;
+ $('reveal-button').textContent=seconds>0?'Extend reveal · +60s':'Reveal hunters · 60s';
+ $('powerup-status').textContent=me?.role==='hunter'?'Only runners can collect and use reveals.':!active?'First pickup spawns at the first shrink after hunting begins.':state.powerup?'A sidewalk pickup is on the map. First runner within 20m collects it.':count?'Saved for whenever you need it.':'Pickup collected or not spawned yet. Another appears next circle.';
+ $('reveal-timer').textContent=revealActive(state,uid,now())?`Hunters revealed for you · ${formatTime(seconds)}`:count?'Each item reveals all hunters privately for 60 seconds.':'Unused items stack. Getting caught forfeits them.';
+ $('demo-pickup').hidden=!demo||!active||me?.role!=='runner'||!state.powerup;
+}
+$('reveal-button').onclick=()=>guarded(()=>action('reveal'));
+$('demo-pickup').onclick=()=>{
+ if(!demo||!state.powerup)return;
+ const me=state.players.find(p=>p.id===uid);
+ Object.assign(me,{lat:state.powerup.lat,lng:state.powerup.lng,accuracy:10,updated:now()});
+ collectDemoPowerup(state,uid,now());render();
+};
+
+function renderStats(){
+ const finished=state.phase==='finished',me=state.players.find(p=>p.id===uid);
+ $('end-stats').hidden=!finished;if(!finished)return;
+ $('stats-demo-note').hidden=!demo;
+ const st=me?.stats,available=!!st;
+ $('stat-distance').textContent=available?`${((st.distance_m||0)/1609.344).toFixed(2)} mi`:'Not recorded';
+ $('stat-speed').textContent=available?`${((st.top_mps||0)*2.2369362921).toFixed(1)} mph`:'Not recorded';
+ const end=me?.caught_at??me?.left_at??state.ended_at;
+ $('stat-survival').textContent=me?.initial_hunter?'Started as hunter':state.started_at!=null&&end!=null?formatTime(Math.max(0,end-state.started_at)):'Not recorded';
+ $('stat-collected').textContent=available?String(st.collected||0):'—';$('stat-used').textContent=available?String(st.used||0):'—';
+ const caught=state.players.filter(p=>!p.initial_hunter&&p.caught_at!=null).sort((a,b)=>a.caught_at-b.caught_at);
+ let rank=0,previous=null;
+ $('catch-order').replaceChildren(...caught.map((p,i)=>{
+  if(previous!==p.caught_at)rank=i+1;previous=p.caught_at;
+  const li=document.createElement('li'),detail=document.createElement('small');li.value=rank;
+  li.append(document.createTextNode(p.name+(p.id===uid?' (you)':'')));
+  detail.textContent=`${state.started_at!=null?formatTime(Math.max(0,p.caught_at-state.started_at))+' · ':''}${p.reason||'Caught'}`;
+  li.append(detail);return li;
+ }));
+ if(!caught.length){const li=document.createElement('li');li.textContent='No runners were caught.';$('catch-order').append(li);}
+ $('initial-hunters').textContent='Starting hunters: '+(state.players.filter(p=>p.initial_hunter).map(p=>p.name).join(', ')||'Not recorded');
+ const remaining=state.players.filter(p=>!p.initial_hunter&&p.caught_at==null);
+ $('uncaught-players').textContent=remaining.map(p=>`${p.name}: ${p.left?'left game':'not caught before game ended'}`).join(' · ');
+}
+
+$('demo-results').onclick=()=>{
+ if(!demo||!state||state.phase==='finished')return;
+ offset+=Math.max(0,state.started_at+1800-now());
+ for(const [i,id] of ['d','b','c','me'].entries()){
+  const p=state.players.find(p=>p.id===id);
+  if(p&&p.caught_at==null){p.caught_at=state.started_at+600+i*300;p.role='hunter';p.reason='Tagged';}
+ }
+ finishDemo();render();
+};
