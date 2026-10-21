@@ -1,3 +1,4 @@
+import {CAMPUS_PATH_POINTS} from '../campus-paths.js';
 import {PGlite} from '@electric-sql/pglite';
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
@@ -53,13 +54,14 @@ await check('starting circle rejects an outside start',async()=>{
  await assert.rejects(()=>action(0,code,'start',{hunters:1}),/starting circle/);
  await action(0,code,'end');
 });
-await check('runner pings remain frozen for 120 seconds while own GPS stays live',async()=>{
+await check('runner pings remain frozen for 60 seconds while own GPS stays live',async()=>{
  s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
  await action(0,code,'poll',gps);await action(1,code,'poll',gps);
  const moved={...gps,lat:gps.lat+.001};const own=await action(1,code,'poll',moved);
  assert.equal(own.players[1].lat,moved.lat);
  const other=await action(0,code);assert.equal(other.players[1].lat,gps.lat);
- await edit(code,s=>s.players[1].ping.updated=stamp()-121);
+ await edit(code,s=>s.players[1].ping.updated=stamp()-59);await action(1,code,'poll',moved);s=await action(0,code);assert.equal(s.players[1].lat,gps.lat);
+ await edit(code,s=>s.players[1].ping.updated=stamp()-61);
  await action(1,code,'poll',moved);s=await action(0,code);assert.equal(s.players[1].lat,moved.lat);
  await action(0,code,'end');
 });
@@ -89,5 +91,93 @@ await check('host can choose exact hunters and invalid selections are rejected',
  s=await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[1]]});
  assert.equal(s.players.find(p=>p.id===ids[1]).role,'hunter');assert.equal(s.players.find(p=>p.id===ids[0]).role,'runner');
  await action(0,code,'end');
+});
+await check('southern destination is reachable and hidden from clients',async()=>{
+ let c={lat:38.9897,lng:-76.9436,radius:800,target:{lat:38.9835,lng:-76.9445}};
+ for(let i=0;i<25;i++){
+  const next=(await db.query('select public.manhunt_next($1) as c',[c])).rows[0].c;
+  const d=(await db.query('select public.manhunt_distance($1,$2) as d',[c,next])).rows[0].d;
+  assert.ok(d+next.radius<=c.radius+.01);c=next;
+ }
+ assert.ok(c.lat<38.984);
+ s=await enter(0,'Host');code=s.code;assert.ok(!('target' in s.next));assert.ok(!('target' in s.circle));await action(0,code,'end');
+});
+await check('power-up first claim, stacking, private reveal, expiry and infection',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Other runner',code);
+ await edit(code,s=>{s.phase='active';s.round=2;s.deadline=stamp()+300;s.players[0].role='hunter';for(const p of s.players)Object.assign(p,gps,{updated:stamp()});s.powerup={...gps,radius:20,spawned_at:stamp()-1};});
+ await action(0,code,'poll',gps);s=await action(1,code);assert.ok(s.powerup); // No pickup without a new GPS fix.
+ s=await action(1,code,'poll',{...gps,accuracy:50});assert.ok(s.powerup);
+ s=await action(1,code,'poll',gps);assert.equal(s.powerup,null);assert.equal(s.players[1].powerups,1);
+ s=await action(2,code,'poll',gps);assert.equal(s.players[2].powerups||0,0);assert.ok(!('powerups' in s.players[1]));
+ await assert.rejects(()=>action(2,code,'reveal'),/power|reveal|item/i);
+ await edit(code,s=>s.powerup={...gps,radius:20,spawned_at:stamp()-1});
+ s=await action(1,code,'poll',gps);assert.equal(s.players[1].powerups,2);assert.equal(s.players[1].stats.collected,2);
+ s=await action(1,code,'reveal');assert.equal(s.players[1].powerups,1);assert.equal(s.players[0].lat,gps.lat);const until=s.players[1].reveal_until;
+ s=await enter(1,'Reconnect',code);assert.equal(s.players[0].lat,gps.lat);
+ s=await action(2,code);assert.equal(s.players[0].lat,null);assert.ok(!('reveal_until' in s.players[1]));
+ s=await action(1,code,'reveal');assert.equal(s.players[1].reveal_until,until+60);assert.equal(s.players[1].stats.used,2);
+ await edit(code,s=>s.players[1].reveal_until=stamp()-1);s=await action(1,code);assert.equal(s.players[0].lat,null);
+ await edit(code,s=>{s.players[1].powerups=2;s.players[1].reveal_until=stamp()+60;});
+ s=await action(1,code,'tag');assert.equal(s.players[1].powerups,0);assert.equal(s.players[1].reveal_until,null);assert.equal(s.players[1].stats.collected,2);assert.equal(s.players[1].stats.used,2);
+ await action(0,code,'end');
+});
+await check('pickup starts at round two and is replaced at the next shrink',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
+ await edit(code,s=>{s.phase='headstart';s.deadline=stamp()-1;s.players[0].role='hunter';});
+ s=await action(0,code);assert.equal(s.round,1);assert.ok(!s.powerup);
+ await edit(code,s=>s.deadline=stamp()-1);s=await action(0,code);assert.equal(s.round,2);assert.equal(s.powerup.round,2);const id=s.powerup.id;
+ await edit(code,s=>s.deadline=stamp()-1);s=await action(0,code);assert.equal(s.round,3);assert.notEqual(s.powerup.id,id);
+ await action(0,code,'end');
+});
+await check('SQL pickups use bundled sidewalk samples without off-path fallback',async()=>{
+ const c={lat:38.9897,lng:-76.9436,radius:571};
+ for(let i=0;i<12;i++){
+  const p=(await db.query('select public.manhunt_powerup($1,2,10) as p',[c])).rows[0].p;
+  assert.ok(CAMPUS_PATH_POINTS.some(([lat,lng])=>lat===p.lat&&lng===p.lng));
+  const d=(await db.query('select public.manhunt_distance($1,$2) as d',[c,p])).rows[0].d;assert.ok(d+20<=c.radius+.01);
+ }
+ const empty=(await db.query('select public.manhunt_powerup($1,3,10) as p',[{lat:0,lng:0,radius:30}])).rows[0].p;assert.equal(empty,null);
+});
+await check('movement estimates reject GPS noise, spikes, repeats, gaps and stale fixes',async()=>{
+ async function track(p,fix,t){return (await db.query('select public.manhunt_track($1,$2,$3) as p',[p,fix,t])).rows[0].p;}
+ const base={...gps,accuracy:5};let p=await track({}, {...base,captured_at:100},100);
+ p=await track(p,{...base,lat:base.lat+.0001,captured_at:106},106);
+ assert.ok(p.stats.distance_m>10&&p.stats.distance_m<12);assert.ok(p.stats.top_mps>1.7&&p.stats.top_mps<2);
+ const distance=p.stats.distance_m,top=p.stats.top_mps;
+ p=await track(p,{...base,lat:base.lat+.0001,captured_at:106},107);assert.equal(p.stats.distance_m,distance);
+ p=await track(p,{...base,lat:base.lat+.00011,captured_at:112},112);assert.equal(p.stats.distance_m,distance); // Jitter below 5m.
+ p=await track(p,{...base,lat:base.lat+.02,captured_at:118},118);assert.equal(p.stats.distance_m,distance); // Teleport.
+ p=await track(p,{...base,lat:base.lat+.03,accuracy:50,captured_at:124},124);assert.equal(p.stats.distance_m,distance);
+ p=await track(p,{...base,lat:base.lat+.03,captured_at:160},160);assert.equal(p.stats.distance_m,distance); // Tracking gap.
+ p=await track(p,{...base,lat:base.lat+.0301,captured_at:161},180);assert.equal(p.stats.distance_m,distance); // Stale.
+ assert.equal(p.stats.top_mps,top);
+});
+await check('personal stats stay private and persist after catch, reconnect and finish',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ for(const i of [0,1,2])await action(i,code,'poll',gps);
+ s=await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});
+ assert.equal(s.players[0].initial_hunter,true);assert.equal(s.players[0].stats.distance_m,0);assert.ok(!('stats' in s.players[1]));
+ await edit(code,s=>{s.players[1].stats={distance_m:123,top_mps:3,collected:2,used:1};s.players[1].stats_anchor={...gps,time:stamp()};});
+ s=await action(1,code);assert.equal(s.players[1].stats.distance_m,123);assert.ok(s.players.every(p=>!('stats_anchor' in p)));assert.ok(!('stats' in s.players[0]));
+ s=await action(1,code,'tag');const caught=s.players[1].caught_at;assert.ok(caught>=s.started_at);
+ s=await action(1,code,'tag');assert.equal(s.players[1].caught_at,caught);
+ s=await action(2,code,'tag');assert.equal(s.phase,'finished');const ended=s.ended_at;assert.ok(ended>=caught);
+ s=await enter(1,'Reconnect',code);assert.equal(s.players[1].stats.distance_m,123);assert.equal(s.players[1].stats.collected,2);assert.equal(s.players[1].stats.used,1);assert.equal(s.players[1].caught_at,caught);
+ assert.ok(s.players.every(p=>p.lat===null&&!('stats_anchor' in p)));assert.ok(!('stats' in s.players[2]));
+ s=await action(0,code);assert.equal(s.ended_at,ended);assert.ok(!('stats' in s.players[1]));
+});
+await check('simultaneous zone infections share boundary time in catch order',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ for(const i of [0,1,2])await action(i,code,'poll',gps);
+ await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});
+ const boundary=stamp()-1;
+ await edit(code,s=>{s.phase='active';s.round=1;s.deadline=boundary;for(const p of s.players)Object.assign(p,{lat:39.1,lng:-76.94,accuracy:10,updated:boundary-1});});
+ s=await action(0,code);assert.equal(s.phase,'finished');assert.equal(s.players[1].caught_at,boundary);assert.equal(s.players[2].caught_at,boundary);assert.equal(s.players[0].caught_at,undefined);
+});
+await check('leaving is distinct from being caught and stores its timestamp',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ for(const i of [0,1,2])await action(i,code,'poll',gps);
+ await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});
+ s=await action(1,code,'leave');assert.equal(s.players[1].caught_at,undefined);assert.ok(s.players[1].left_at>=s.started_at);await action(0,code,'end');
 });
 console.log(`${count} database checks passed`);await db.close();
