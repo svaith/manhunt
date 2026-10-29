@@ -53,7 +53,7 @@ Play only where you are permitted to go. Circle geometry does not know whether a
 
 ## Test before playing
 
-`npm test` runs eleven dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 30 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
+`npm test` runs eleven dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 33 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
 
 Before relying on a real game, test with two or more phones on your deployment:
 
@@ -63,7 +63,7 @@ Before relying on a real game, test with two or more phones on your deployment:
 4. Wait through the head start and first shrink. Verify the new circle matches the preview and test the stale-location grace period with a spare device.
 5. Press **I got tagged**, then end the game and verify all location markers disappear.
 
-Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All eleven browser-logic tests and 30 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
+Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All eleven browser-logic tests and 33 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
 
 ## Files
 
@@ -118,3 +118,7 @@ Each player sees only their own distance (miles), top speed (mph), survival time
 Movement is estimated on the server from GPS fixes with accuracy within 20 meters, sampled over 5–20 seconds. Movement below the accuracy threshold, speeds above 12 m/s, duplicate/old samples, and tracking gaps are excluded. Stats include running and hunting, starting with the head start. These conservative estimates can undercount actual distance. No route history is stored: only totals and a private temporary GPS anchor, cleared when the game ends. Totals remain with the room until its normal expiry; they are not a permanent profile.
 
 The demo shows explicitly labeled illustrative movement totals; skipping a round advances its simulated clock. Use “Preview results” in the demo to see sample personal stats and catch order. New games started after deploying the SQL and frontend record real stats. Old games do not have retroactive stats.
+
+## Lobby removal
+
+Only the room creator can kick another player, and only in the waiting lobby. Kick buttons disappear once the game starts. The server enforces this rule, prevents self-kicks, removes the player’s room data, and blocks that anonymous identity from rejoining the same room. The removed player returns to the entry screen on the next poll, and their tracking stops. Clearing browser data or using another browser creates a new anonymous identity, so this is not a permanent account ban.

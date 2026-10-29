@@ -130,7 +130,7 @@ begin
   end if;
   output:=output||jsonb_build_array(q);
  end loop;
- return jsonb_set(jsonb_set(jsonb_set(s,'{players}',output),'{circle}',(s->'circle')-'target'),'{next}',(s->'next')-'target')||jsonb_build_object('server_now',t,
+ return jsonb_set(jsonb_set(jsonb_set(s-'kicked_ids','{players}',output),'{circle}',(s->'circle')-'target'),'{next}',(s->'next')-'target')||jsonb_build_object('server_now',t,
    'hunter_nearby',case when valid then near else null end,
    'hunters_clear',valid and clear);
 end;
@@ -156,6 +156,7 @@ begin
    select * into r from public.manhunt_rooms where code=c and expires_at>now() for update;
    if not found then raise exception 'Room not found or expired';end if;
    s:=r.state;
+   if coalesce(s->'kicked_ids','[]'::jsonb) ? u::text then raise exception 'You were removed from this lobby.';end if;
    if exists(select 1 from jsonb_array_elements(s->'players') x where x->>'id'=u::text and not coalesce((x->>'left')::boolean,false)) then
      return public.manhunt_snapshot(s,t);
    end if;
@@ -174,19 +175,22 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
  u uuid:=auth.uid(); t float8:=extract(epoch from clock_timestamp());
  r public.manhunt_rooms%rowtype; s jsonb; players jsonb; p jsonb; c jsonb;
- n integer; i integer; idx integer:=-1; h integer; chosen text[];
+ n integer; i integer; idx integer:=-1; target_idx integer; h integer; chosen text[];
  deadline float8; pending float8; lat float8; lng float8; accuracy float8;
  campus jsonb:='{"lat":38.9897,"lng":-76.9436,"radius":800}';
 begin
  if u is null then raise exception 'Sign in anonymously first';end if;
- if p_action is null or p_action not in ('poll','start','tag','end','leave','reveal') then raise exception 'Unknown game action';end if;
+ if p_action is null or p_action not in ('poll','start','tag','end','leave','reveal','kick') then raise exception 'Unknown game action';end if;
  select * into r from public.manhunt_rooms where code=upper(trim(p_code)) for update;
  if not found then raise exception 'Room not found';end if;
  s:=r.state;players:=s->'players';n:=jsonb_array_length(players);
  for i in 0..n-1 loop
    if players->i->>'id'=u::text and not coalesce((players->i->>'left')::boolean,false) then idx:=i;exit;end if;
  end loop;
- if idx=-1 then raise exception 'You are not a member of this room';end if;
+ if idx=-1 then
+  if coalesce(s->'kicked_ids','[]'::jsonb) ? u::text then raise exception 'You were removed from this lobby.';end if;
+  raise exception 'You are not a member of this room';
+ end if;
  if r.expires_at<=now() then s:=s||'{"phase":"finished","deadline":null,"end_reason":"Room expired after 12 hours."}'::jsonb;end if;
 
  -- Advance against server deadlines BEFORE accepting a new GPS sample.
@@ -239,7 +243,20 @@ begin
    players:=jsonb_set(players,array[idx::text],p);
  end if;
 
- if p_action='start' then
+ if p_action='kick' then
+   if u<>r.host then raise exception 'Only the host can remove players';end if;
+   if s->>'phase'<>'lobby' then raise exception 'Players can only be removed from the waiting lobby';end if;
+   if p_payload->>'player_id'=u::text then raise exception 'The host cannot kick themselves';end if;
+   target_idx:=null;
+   for i in 0..n-1 loop
+    if players->i->>'id'=p_payload->>'player_id' then target_idx:=i;exit;end if;
+   end loop;
+   if target_idx is null then raise exception 'Player is not in this lobby';end if;
+   s:=s||jsonb_build_object('kicked_ids',coalesce(s->'kicked_ids','[]'::jsonb)||jsonb_build_array(p_payload->>'player_id'));
+   players:=players-target_idx;
+   if target_idx<idx then idx:=idx-1;end if;
+   n:=n-1;
+ elsif p_action='start' then
    if u<>r.host then raise exception 'Only the host can start';end if;
    if s->>'phase'<>'lobby' then raise exception 'Game already started';end if;
    h:=(p_payload->>'hunters')::int;

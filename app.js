@@ -53,7 +53,7 @@ async function sync(action='poll',extra={}){
     }
     const data=await rpc('manhunt_action',{p_code:state.code,p_action:action,p_payload:payload});
     state=data;lastSuccess=Date.now();$('connection').hidden=true;render();
-  }catch(e){$('connection').textContent=`Not synced: ${e.message}. Reconnecting…`;$('connection').hidden=false;if(action!=='poll')toast(e.message);}
+  }catch(e){if((e.message||'').includes('removed from this lobby')){exitRemovedLobby();return;}$('connection').textContent=`Not synced: ${e.message}. Reconnecting…`;$('connection').hidden=false;if(action!=='poll')toast(e.message);}
   finally{polling=false;}
 }
 async function action(type,extra={}){
@@ -131,7 +131,13 @@ function render(){
     const li=document.createElement('li'),av=document.createElement('span'),name=document.createElement('span'),sub=document.createElement('small'),badge=document.createElement('span');
     av.className='avatar'+(p.role==='hunter'?' infected':'');av.textContent=p.name.slice(0,2).toUpperCase();name.className='player-name';name.textContent=p.name+(p.id===uid?' (you)':'');
     sub.textContent=finished?(p.reason||''):p.role==='hunter'&&me?.role!=='hunter'&&!revealActive(state,uid,now())?'Location hidden':p.lat==null?(p.role==='hunter'?'Location hidden':'Waiting for GPS'):fresh(p,now())?'Live GPS':`GPS ${Math.max(0,Math.floor(now()-p.updated))}s old`;name.append(sub);
-    badge.className='badge'+(p.role==='hunter'?' infected':'');badge.textContent=lobby?'Ready?':p.role;li.append(av,name,badge);return li;
+    badge.className='badge'+(p.role==='hunter'?' infected':'');badge.textContent=lobby?'Ready?':p.role;li.append(av,name,badge);
+    if(host&&lobby&&p.id!==uid){
+      const kick=document.createElement('button');kick.type='button';kick.className='kick-button';kick.textContent='Kick';kick.setAttribute('aria-label',`Kick ${p.name}`);
+      kick.onclick=()=>guarded(async()=>{if(await confirmAction(`Kick ${p.name}?`,'They’ll be removed from this lobby and cannot rejoin it from the same browser.'))await action('kick',{player_id:p.id});});
+      li.append(kick);
+    }
+    return li;
   }));
   if(map){
     circle.setLatLng([state.circle.lat,state.circle.lng]).setRadius(state.circle.radius);
@@ -288,3 +294,12 @@ $('demo-results').onclick=()=>{
  }
  finishDemo();render();
 };
+
+function exitRemovedLobby(){
+ stopTracking();clearInterval(pollHandle);wakeLock?.release();state=null;demo=false;
+ localStorage.removeItem('manhunt-room');savedCode='';$('room-code').value='';
+ for(const marker of markers.values())marker.remove();markers.clear();
+ powerupMarker?.remove();powerupRing?.remove();powerupMarker=null;powerupRing=null;
+ $('players').replaceChildren();$('game').hidden=true;$('welcome').hidden=false;$('connection').hidden=true;
+ toast('The host removed you from the lobby.');
+}
