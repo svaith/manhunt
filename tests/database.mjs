@@ -33,7 +33,11 @@ await check('viewer-specific hunter visibility on polls and reconnect',async()=>
 });
 await check('late joins closed and existing membership reconnects',async()=>{await assert.rejects(()=>enter(2,'Late',code),/already started/);const re=await enter(1,'Runner',code);assert.equal(re.players.length,2);});
 await check('headstart ends without shrinking',async()=>{await edit(code,s=>s.deadline=stamp()-1);s=await action(0,code);assert.equal(s.phase,'active');assert.equal(s.round,1);assert.equal(s.circle.radius,800);});
-await check('outside player infected at shrink, final locations cleared',async()=>{await edit(code,s=>{s.deadline=stamp()-1;for(const p of s.players){p.lat=39.1;p.lng=-76.94;p.updated=stamp()-2;p.accuracy=10;}});s=await action(0,code);assert.equal(s.phase,'finished');assert.ok(s.players.every(p=>p.role==='hunter'&&p.lat===null));});
+await check('outside players infected together at shrink, final locations cleared',async()=>{
+ await action(0,code,'end');s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ await edit(code,s=>{s.phase='active';s.started_at=stamp()-600;s.deadline=stamp()-1;s.players[0].role='hunter';for(const p of s.players){p.lat=39.1;p.lng=-76.94;p.updated=stamp()-2;p.accuracy=10;}});
+ s=await action(0,code);assert.equal(s.phase,'finished');assert.ok(s.players.every(p=>p.role==='hunter'&&p.lat===null));
+});
 await check('direct table access denied',async()=>{await db.exec('set role authenticated');await assert.rejects(()=>db.query('select * from public.manhunt_rooms'),/permission denied/);await db.exec('reset role');});
 async function active(){let s=await enter(0,'Host');await enter(1,'Runner',s.code);await edit(s.code,s=>{s.phase='active';s.round=1;s.deadline=stamp()-1;s.players[0].role='hunter';});return s.code;}
 code=await active();
@@ -203,5 +207,50 @@ await check('kick is unavailable after start and after game ends',async()=>{
  await edit(code,s=>{s.phase='active';s.deadline=stamp()+300;});
  await assert.rejects(()=>action(0,code,'kick',{player_id:ids[1]}),/waiting lobby/);
  await action(0,code,'end');await assert.rejects(()=>action(0,code,'kick',{player_id:ids[1]}),/waiting lobby/);
+});
+async function finalRoom(){
+ let room=await enter(0,'Host');const c=room.code;await enter(1,'Runner 1',c);await enter(2,'Runner 2',c);
+ for(const i of [0,1,2])await action(i,c,'poll',gps);
+ await action(0,c,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});
+ await edit(c,s=>{s.phase='active';s.round=1;s.deadline=stamp()+300;});return c;
+}
+await check('last runner triggers a public sidewalk escape zone and freezes shrinking',async()=>{
+ code=await finalRoom();s=await action(1,code,'tag');assert.ok(s.escape);assert.equal(s.escape.runner_id,ids[2]);assert.equal(s.escape.radius,20);assert.equal(s.deadline-s.server_now,180);assert.equal(s.powerup,null);
+ assert.ok(CAMPUS_PATH_POINTS.some(([lat,lng])=>lat===s.escape.lat&&lng===s.escape.lng));
+ const d=(await db.query('select public.manhunt_distance($1,$2) d',[gps,s.escape])).rows[0].d;assert.ok(d>=60&&d<=400);
+ const hunterView=s.escape;const runnerView=(await action(2,code)).escape;assert.deepEqual(runnerView,hunterView);
+ assert.ok(!('last_escape_circle' in s));const radius=s.circle.radius;await edit(code,s=>s.next.radius=0);s=await action(0,code);assert.equal(s.circle.radius,radius);await action(0,code,'end');
+});
+await check('no escape during headstart, starts when hunters begin even in two-player games',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);for(const i of [0,1])await action(i,code,'poll',gps);
+ s=await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});assert.ok(!s.escape);
+ await edit(code,s=>s.deadline=stamp()-1);s=await action(0,code);assert.ok(s.escape);assert.equal(s.round,1);assert.equal(s.circle.radius,800);await action(0,code,'end');
+});
+await check('only a fresh accurate last-runner fix can win; result survives later actions',async()=>{
+ code=await finalRoom();s=await action(1,code,'tag');const target={lat:s.escape.lat,lng:s.escape.lng,accuracy:10};
+ s=await action(0,code,'poll',target);assert.equal(s.phase,'active');
+ s=await action(2,code,'poll',{...target,accuracy:50});assert.equal(s.phase,'active');
+ s=await action(2,code);assert.equal(s.phase,'active');
+ s=await action(2,code,'poll',{...target,captured_at:s.escape.spawned_at-1});assert.equal(s.phase,'active');
+ s=await action(2,code,'poll',{...target,captured_at:stamp()});assert.equal(s.phase,'finished');assert.equal(s.winner,'runner');assert.equal(s.winner_id,ids[2]);assert.ok(s.players.every(p=>p.lat===null));
+ const reason=s.end_reason,ended=s.ended_at;s=await action(2,code,'leave');assert.equal(s.ended_at,ended);assert.equal(s.players[2].left,undefined);await action(0,code,'end');s=await action(0,code,'leave');assert.equal(s.winner,'runner');assert.equal(s.end_reason,reason);
+});
+await check('escape timeout is resolved before accepting GPS; runner is not listed as caught',async()=>{
+ code=await finalRoom();s=await action(1,code,'tag');const deadline=stamp()-1;await edit(code,s=>s.deadline=deadline);
+ s=await action(2,code,'poll',{lat:s.escape.lat,lng:s.escape.lng,accuracy:10});assert.equal(s.phase,'finished');assert.equal(s.winner,'hunters');assert.equal(s.ended_at,deadline);assert.equal(s.players[2].caught_at,undefined);assert.ok(s.players.every(p=>p.lat===null));
+});
+await check('tagging the final runner wins for hunters and cannot be undone by GPS',async()=>{
+ code=await finalRoom();s=await action(1,code,'tag');const target={lat:s.escape.lat,lng:s.escape.lng,accuracy:10};
+ s=await action(2,code,'tag',target);assert.equal(s.phase,'finished');assert.equal(s.winner,'hunters');assert.ok(s.players[2].caught_at);
+ s=await action(2,code,'poll',target);assert.equal(s.winner,'hunters');
+});
+await check('tiny circles use a larger arena instead of an off-path or underneath pickup',async()=>{
+ code=await finalRoom();await edit(code,s=>{s.circle={...gps,radius:10};});s=await action(1,code,'tag');assert.ok(s.circle.radius>=150);assert.ok(s.escape);
+ const d=(await db.query('select public.manhunt_distance($1,$2) d',[gps,s.escape])).rows[0].d;assert.ok(d>=60);await action(0,code,'end');
+});
+await check('late polling through headstart and final deadline awards hunters',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);for(const i of [0,1])await action(i,code,'poll',gps);
+ await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});await edit(code,s=>s.deadline=stamp()-200);
+ s=await action(0,code);assert.equal(s.phase,'finished');assert.equal(s.winner,'hunters');
 });
 console.log(`${count} database checks passed`);await db.close();
