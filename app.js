@@ -157,8 +157,8 @@ function render(){
     }
     escapeMarker?.remove();escapeRing?.remove();escapeMarker=null;escapeRing=null;
     if(state.escape&&!finished){const z=state.escape;
-      escapeRing=L.circle([z.lat,z.lng],{radius:20,color:'#53d9ef',fillColor:'#53d9ef',fillOpacity:.45,weight:3}).addTo(map);
-      escapeMarker=L.marker([z.lat,z.lng],{icon:L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:'<div class="escape-pin">⚑</div>'})}).bindTooltip('ESCAPE · Last runner wins on entering · 20m').addTo(map);
+      escapeRing=L.circle([z.lat,z.lng],{radius:z.radius||30,color:'#53d9ef',fillColor:'#53d9ef',fillOpacity:.45,weight:3}).addTo(map);
+      escapeMarker=L.marker([z.lat,z.lng],{icon:L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:'<div class="escape-pin">⚑</div>'})}).bindTooltip(`ESCAPE · Last runner wins on entering · ${z.radius||30}m`).addTo(map);
     }
     const visible=new Set();
     for(const entry of state.players){

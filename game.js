@@ -93,13 +93,13 @@ export function beginDemoEscape(s,now,random=Math.random){
  const runner=runners[0],origin=runner.lat!=null?runner:s.circle;
  let arena=s.circle,candidates=[];
  for(const c of [s.circle,s.last_escape_circle||CAMPUS]){
-  arena=c;candidates=CAMPUS_PATH_POINTS.filter(([lat,lng])=>{const p={lat,lng},d=distance(origin,p);return distance(c,p)<=Math.max(0,c.radius-20)&&d>=60&&d<=400;});
+  arena=c;candidates=CAMPUS_PATH_POINTS.filter(([lat,lng])=>{const p={lat,lng},d=distance(origin,p);return distance(c,p)<=Math.max(0,c.radius-30)&&d>=60&&d<=400;});
   if(candidates.length)break;
  }
- if(!candidates.length){candidates=CAMPUS_PATH_POINTS.filter(([lat,lng])=>distance(arena,{lat,lng})<=Math.max(0,arena.radius-20)).sort((a,b)=>distance(origin,{lat:b[0],lng:b[1]})-distance(origin,{lat:a[0],lng:a[1]})).slice(0,1);}
+ if(!candidates.length){candidates=CAMPUS_PATH_POINTS.filter(([lat,lng])=>distance(arena,{lat,lng})<=Math.max(0,arena.radius-30)).sort((a,b)=>distance(origin,{lat:b[0],lng:b[1]})-distance(origin,{lat:a[0],lng:a[1]})).slice(0,1);}
  if(!candidates.length)return false;
  const [lat,lng]=candidates[Math.min(candidates.length-1,Math.floor(random()*candidates.length))];
- s.circle={...arena};s.next={...arena};s.powerup=null;s.deadline=now+180;s.escape={lat,lng,radius:20,runner_id:runner.id,spawned_at:now};
+ s.circle={...arena};s.next={...arena};s.powerup=null;s.deadline=now+180;s.escape={lat,lng,radius:30,runner_id:runner.id,spawned_at:now};
  for(const p of s.players){p.pending_until=null;p.pending_circle=null;}return true;
 }
 export function finishDemoState(s,now,winner,reason){
@@ -108,6 +108,6 @@ export function finishDemoState(s,now,winner,reason){
 }
 export function reachDemoEscape(s,id,now){
  const p=s.players.find(p=>p.id===id);
- if(s.phase!=='active'||!s.escape||s.escape.runner_id!==id||p?.role!=='runner'||p.left||now>=s.deadline||!fresh(p,now)||now-p.updated>15||p.updated<s.escape.spawned_at||(p.accuracy??999)>20||distance(p,s.escape)>20)return false;
+ if(s.phase!=='active'||!s.escape||s.escape.runner_id!==id||p?.role!=='runner'||p.left||now>=s.deadline||!fresh(p,now)||now-p.updated>15||p.updated<s.escape.spawned_at||(p.accuracy??999)>20||distance(p,s.escape)>(s.escape.radius||30))return false;
  s.winner_id=id;finishDemoState(s,now,'runner',`${p.name} escaped! Runner wins.`);return true;
 }

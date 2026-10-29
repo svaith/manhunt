@@ -112,7 +112,7 @@ begin
  for attempt in 1..2 loop
   select jsonb_build_object('lat',point->0,'lng',point->1) into candidate
   from jsonb_array_elements(public.manhunt_path_points()) points(point)
-  where public.manhunt_distance(c,jsonb_build_object('lat',point->0,'lng',point->1))<=greatest(0,(c->>'radius')::float8-20)
+  where public.manhunt_distance(c,jsonb_build_object('lat',point->0,'lng',point->1))<=greatest(0,(c->>'radius')::float8-30)
    and public.manhunt_distance(origin,jsonb_build_object('lat',point->0,'lng',point->1)) between 60 and 400
   order by random() limit 1;
   if candidate is not null then exit;end if;
@@ -122,12 +122,12 @@ begin
  if candidate is null then
   select jsonb_build_object('lat',point->0,'lng',point->1) into candidate
   from jsonb_array_elements(public.manhunt_path_points()) points(point)
-  where public.manhunt_distance(c,jsonb_build_object('lat',point->0,'lng',point->1))<=greatest(0,(c->>'radius')::float8-20)
+  where public.manhunt_distance(c,jsonb_build_object('lat',point->0,'lng',point->1))<=greatest(0,(c->>'radius')::float8-30)
   order by public.manhunt_distance(origin,jsonb_build_object('lat',point->0,'lng',point->1)) desc limit 1;
  end if;
  if candidate is null then raise exception 'No sidewalk escape zone available';end if;
  select jsonb_agg(x||'{"pending_until":null,"pending_circle":null}'::jsonb) into players from jsonb_array_elements(players) x;
- return s||jsonb_build_object('players',players,'circle',c,'next',c,'powerup',null,'deadline',t+180,'escape',candidate||jsonb_build_object('radius',20,'runner_id',runner->>'id','spawned_at',t));
+ return s||jsonb_build_object('players',players,'circle',c,'next',c,'powerup',null,'deadline',t+180,'escape',candidate||jsonb_build_object('radius',30,'runner_id',runner->>'id','spawned_at',t));
 end;
 $$;
 
@@ -387,7 +387,7 @@ begin
   and p_action='poll' and p_payload ? 'lat' and p->>'id'=s->'escape'->>'runner_id' and p->>'role'='runner'
   and coalesce((p_payload->>'captured_at')::float8,t)>=(s->'escape'->>'spawned_at')::float8
   and coalesce((p_payload->>'captured_at')::float8,t) between t-15 and t+1
-  and (p->>'accuracy')::float8<=20 and public.manhunt_distance(p,s->'escape')<=20 then
+  and (p->>'accuracy')::float8<=20 and public.manhunt_distance(p,s->'escape')<=coalesce((s->'escape'->>'radius')::float8,30) then
   s:=s||jsonb_build_object('phase','finished','winner','runner','winner_id',p->>'id','deadline',null,'ended_at',t,'end_reason',(p->>'name')||' escaped! Runner wins.');
  end if;
  if s->>'phase' in ('headstart','active') and not exists(select 1 from jsonb_array_elements(players) x where x->>'role'='runner' and not coalesce((x->>'left')::boolean,false)) then

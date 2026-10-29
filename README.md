@@ -125,7 +125,7 @@ Only the room creator can kick another player, and only in the waiting lobby. Ki
 
 ## Last-runner escape
 
-When exactly one runner remains after the head start, the shrinking circle freezes and a blue 20-meter escape zone appears for everyone. The last runner has three minutes to enter it and wins immediately on a new GPS fix with accuracy within 20 meters. Hunters win if the runner is tagged, leaves, or the escape timer expires. The server resolves expiry before accepting GPS; cached fixes cannot win. Existing reveals still work during the chase, and no new power-ups spawn.
+When exactly one runner remains after the head start, the shrinking circle freezes and a blue 30-meter-radius escape zone appears for everyone. The last runner has three minutes to enter it and wins immediately on a new GPS fix with accuracy within 20 meters. Hunters win if the runner is tagged, leaves, or the escape timer expires. The server resolves expiry before accepting GPS; cached fixes cannot win. Existing reveals still work during the chase, and no new power-ups spawn.
 
 The target is a mapped sidewalk point, normally 60–400 meters from the runner’s last position, inside the current circle. If that circle cannot fit a separated sidewalk target, the final chase uses the last larger circle (or starting circle), keeping the escape destination on campus paths. Walking-path geometry does not guarantee access or routing distance. GPS estimates and the honor-system tagging button still apply. If multiple requests arrive together, the room lock determines which accepted action resolves first. The final result remains recorded for the room’s lifetime.
 
