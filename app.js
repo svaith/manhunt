@@ -1,9 +1,11 @@
+import {beginDemoEscape,reachDemoEscape,finishDemoState} from './game.js';
 import {compassHeading, proximityTransition} from './v2.js';
 import {spawnPowerup, collectDemoPowerup, activateDemoReveal, revealActive, CAMPUS, ZONE_DESTINATIONS, nextCircle, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
 const $=id=>document.getElementById(id);
 let client,uid,state,map,circle,next,markers=new Map(),demo=false,joinMode=false,busy=false,polling=false,watch=null,position=null,lastUpload=0,offset=0,lastSuccess=0,timerHandle,pollHandle,wakeLock;
 let heading=null,headingAt=0,compassOn=false,nearLatch=false;
 let selectedHunters=new Set(),previousRoles=null,previousPhase=null;
+let escapeMarker=null,escapeRing=null;
 let powerupMarker=null,powerupRing=null,previousInventory=null,wasRevealing=false;
 let savedCode=localStorage.getItem('manhunt-room')||'';
 const cfg=window.MANHUNT_CONFIG||{};
@@ -57,7 +59,7 @@ async function sync(action='poll',extra={}){
   finally{polling=false;}
 }
 async function action(type,extra={}){
-  if(demo){if(type==='tag'){const p=state.players.find(p=>p.id===uid);p.caught_at??=now();p.role='hunter';p.reason='Tagged';p.powerups=0;p.reveal_until=null;if(state.players.every(p=>p.role==='hunter'))finishDemo();}if(type==='end')finishDemo();if(type==='reveal')activateDemoReveal(state,uid,now());render();return;}
+  if(demo){if(type==='tag'){const p=state.players.find(p=>p.id===uid);p.caught_at??=now();p.role='hunter';p.reason='Tagged';p.powerups=0;p.reveal_until=null;if(state.players.every(p=>p.role==='hunter'))finishDemoState(state,now(),'hunters','Hunters win! Everyone was infected.');else beginDemoEscape(state,now());}if(type==='end')finishDemo();if(type==='reveal')activateDemoReveal(state,uid,now());render();return;}
   if(polling){toast('Syncing — try again in a moment.');return;}
   await sync(type,extra);
 }
@@ -69,7 +71,8 @@ $('start-button').onclick=()=>guarded(()=>action('start',{hunters:Number($('hunt
 $('advance-demo').onclick=()=>{
  if(state.phase==='finished')return;
  offset+=Math.max(0,(state.deadline||now())-now());
- if($('demo-zone').value==='random')advanceDemo(state,now());
+ if(state.escape)advanceDemo(state,now());
+ else if($('demo-zone').value==='random')advanceDemo(state,now());
  else{
   if(state.phase==='headstart'){state.phase='active';state.round=1;}
   else{state.circle=state.next;state.next=nextCircle(state.circle);state.round++;state.powerup=spawnPowerup(state.circle,state.round,now());}
@@ -120,11 +123,15 @@ function render(){
   }));
   $('hunter-selection-status').textContent=`${selectedHunters.size} of ${$('hunter-select').value} hunters selected`;
   $('start-button').disabled=(manual&&selectedHunters.size!==Number($('hunter-select').value))||state.players.filter(p=>!p.left).length<2||!state.players.filter(p=>!p.left).every(p=>(demo?fresh(p,now())&&p.accuracy<=100&&!outside(p,CAMPUS):p.ready));
-  $('my-role').textContent=finished?'Hunt complete':lobby?'In the lobby':me?.role==='hunter'?'You’re a hunter':'You’re a runner';
+  $('my-role').textContent=finished?(state.winner==='runner'?(state.winner_id===uid?'You escaped!':'Runner wins'):state.winner==='hunters'?'Hunters win':'Hunt complete'):lobby?'In the lobby':me?.role==='hunter'?'You’re a hunter':'You’re a runner';
   $('my-role').style.color=me?.role==='hunter'&&!finished?'var(--red)':'var(--text)';
   $('role-note').textContent=finished?(state.end_reason||'Everyone was infected. Good hunt.') :lobby?'Enable your location. The host starts when everyone is ready.':me?.role==='hunter'?(state.phase==='headstart'?'Let the runners go. The hunt begins when the timer ends.':'Find the runners. Once tagged, they join your team.'):'Stay inside the circle. When tagged, tap the button below.';
   $('tag-button').hidden=lobby||finished||me?.role!=='runner';$('location-button').hidden=finished;$('compass-button').hidden=finished;
   updateProximity();updatePowerups();renderStats();
+  if(state.escape&&!finished)$('role-note').textContent=me?.role==='runner'?'Reach the blue escape zone before the three-minute timer ends.':'Stop the last runner from reaching the blue escape zone.';
+  $('demo-escape-reach').hidden=!demo||!state.escape||finished||me?.role!=='runner';
+  $('demo-finale').disabled=finished;
+  $('advance-demo').textContent=state.escape?'Skip to escape timeout →':'Skip to next round →';
   if(demo)$('location-status').textContent='Simulated locations · demo only';
   if(finished){stopTracking();$('location-status').textContent='Locations cleared. Tracking stopped.';wakeLock?.release();}
   $('players').replaceChildren(...state.players.filter(p=>!p.left).map(p=>{
@@ -141,12 +148,17 @@ function render(){
   }));
   if(map){
     circle.setLatLng([state.circle.lat,state.circle.lng]).setRadius(state.circle.radius);
-    next.setLatLng([state.next.lat,state.next.lng]).setRadius(lobby||finished?0:state.next.radius);
+    next.setLatLng([state.next.lat,state.next.lng]).setRadius(lobby||finished||state.escape?0:state.next.radius);
     powerupMarker?.remove();powerupRing?.remove();powerupMarker=null;powerupRing=null;
     if(state.powerup&&state.phase==='active'){
       const item=state.powerup;
       powerupRing=L.circle([item.lat,item.lng],{radius:20,color:'#e5a925',fillColor:'#ffca49',fillOpacity:.35,weight:2}).addTo(map);
       powerupMarker=L.marker([item.lat,item.lng],{icon:L.divIcon({className:'',iconSize:[32,32],iconAnchor:[16,16],html:'<div class="powerup-pin">⚡</div>'})}).bindTooltip('Hunter reveal pickup · 20m · first runner collects').addTo(map);
+    }
+    escapeMarker?.remove();escapeRing?.remove();escapeMarker=null;escapeRing=null;
+    if(state.escape&&!finished){const z=state.escape;
+      escapeRing=L.circle([z.lat,z.lng],{radius:20,color:'#53d9ef',fillColor:'#53d9ef',fillOpacity:.45,weight:3}).addTo(map);
+      escapeMarker=L.marker([z.lat,z.lng],{icon:L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:'<div class="escape-pin">⚑</div>'})}).bindTooltip('ESCAPE · Last runner wins on entering · 20m').addTo(map);
     }
     const visible=new Set();
     for(const entry of state.players){
@@ -170,10 +182,12 @@ function updateClock(){
   if(revealing!==wasRevealing){wasRevealing=revealing;render();return;}
   if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
   $('phase-label').textContent={lobby:'WAITING ROOM',headstart:'RUNNERS’ HEAD START',active:'NEXT CIRCLE IN',finished:'GAME OVER'}[phase];
+  if(state.escape&&phase==='active')$('phase-label').textContent='FINAL ESCAPE';
   $('round-label').textContent=phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
   $('timer-caption').textContent=phase==='lobby'?'Waiting for your friends':phase==='finished'?'The hunt has ended':phase==='headstart'?'Hunters wait. Runners, get moving.':'Reach the dashed circle before time runs out.';
-  $('progress-fill').style.width=`${state.deadline?Math.max(0,Math.min(100,remaining/300*100)):0}%`;
+  if(state.escape&&phase==='active')$('timer-caption').textContent=state.escape.runner_id===uid?'Shrinking paused. Reach the blue zone to escape.':'Shrinking paused. Catch the runner before they escape.';
+  $('progress-fill').style.width=`${state.deadline?Math.max(0,Math.min(100,remaining/(state.escape?180:300)*100)):0}%`;
   $('radius-label').textContent=phase==='lobby'?'Starting radius':'Current radius';$('radius-value').textContent=`${Math.round(state.circle.radius).toLocaleString()} m`;
   $('map-status').textContent=phase==='finished'?'LOCATIONS CLEARED':demo?'SIMULATED CAMPUS MAP':'LIVE CAMPUS MAP';
   if(!demo&&Date.now()-lastSuccess>12000){$('connection').textContent='Connection is stale. The timer may be ahead of the shared game. Reconnecting…';$('connection').hidden=false;}
@@ -282,7 +296,7 @@ function renderStats(){
  if(!caught.length){const li=document.createElement('li');li.textContent='No runners were caught.';$('catch-order').append(li);}
  $('initial-hunters').textContent='Starting hunters: '+(state.players.filter(p=>p.initial_hunter).map(p=>p.name).join(', ')||'Not recorded');
  const remaining=state.players.filter(p=>!p.initial_hunter&&p.caught_at==null);
- $('uncaught-players').textContent=remaining.map(p=>`${p.name}: ${p.left?'left game':'not caught before game ended'}`).join(' · ');
+ $('uncaught-players').textContent=remaining.map(p=>`${p.name}: ${p.id===state.winner_id?'escaped and won':p.left?'left game':'not caught before game ended'}`).join(' · ');
 }
 
 $('demo-results').onclick=()=>{
@@ -299,7 +313,18 @@ function exitRemovedLobby(){
  stopTracking();clearInterval(pollHandle);wakeLock?.release();state=null;demo=false;
  localStorage.removeItem('manhunt-room');savedCode='';$('room-code').value='';
  for(const marker of markers.values())marker.remove();markers.clear();
- powerupMarker?.remove();powerupRing?.remove();powerupMarker=null;powerupRing=null;
+ powerupMarker?.remove();powerupRing?.remove();powerupMarker=null;powerupRing=null;escapeMarker?.remove();escapeRing?.remove();escapeMarker=null;escapeRing=null;
  $('players').replaceChildren();$('game').hidden=true;$('welcome').hidden=false;$('connection').hidden=true;
  toast('The host removed you from the lobby.');
 }
+
+$('demo-finale').onclick=()=>{
+ if(!demo||!state||state.phase==='finished')return;
+ state.phase='active';for(const p of state.players)if(p.id!==uid&&p.role==='runner'){p.role='hunter';p.reason='Tagged';p.caught_at=now();}
+ beginDemoEscape(state,now());render();fitMap();
+};
+$('demo-escape-reach').onclick=()=>{
+ if(!demo||!state?.escape||state.phase==='finished')return;
+ const me=state.players.find(p=>p.id===uid);Object.assign(me,{lat:state.escape.lat,lng:state.escape.lng,accuracy:10,updated:now()});
+ reachDemoEscape(state,uid,now());render();
+};

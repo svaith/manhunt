@@ -53,7 +53,7 @@ Play only where you are permitted to go. Circle geometry does not know whether a
 
 ## Test before playing
 
-`npm test` runs eleven dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 33 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
+`npm test` runs fourteen dependency-free circle and demo tests. Run `npm install`, then `npm run test:db` for 40 additional checks using an isolated in-memory PostgreSQL runtime. These exercise the real SQL functions with mocked user identities without touching a Supabase project.
 
 Before relying on a real game, test with two or more phones on your deployment:
 
@@ -63,7 +63,7 @@ Before relying on a real game, test with two or more phones on your deployment:
 4. Wait through the head start and first shrink. Verify the new circle matches the preview and test the stale-location grace period with a spare device.
 5. Press **I got tagged**, then end the game and verify all location markers disappear.
 
-Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All eleven browser-logic tests and 33 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
+Database functions are transactional and serialize updates to each room using a row lock, so concurrent requests cannot overwrite each other's tags or circle transitions. All fourteen browser-logic tests and 40 database checks passed during development. The desktop/mobile layout, demo map, timer transition and tagging confirmation were checked in a browser. Your configured Supabase Auth, cleanup schedule and real phone GPS still need the deployment checks above.
 
 ## Files
 
@@ -122,3 +122,11 @@ The demo shows explicitly labeled illustrative movement totals; skipping a round
 ## Lobby removal
 
 Only the room creator can kick another player, and only in the waiting lobby. Kick buttons disappear once the game starts. The server enforces this rule, prevents self-kicks, removes the player’s room data, and blocks that anonymous identity from rejoining the same room. The removed player returns to the entry screen on the next poll, and their tracking stops. Clearing browser data or using another browser creates a new anonymous identity, so this is not a permanent account ban.
+
+## Last-runner escape
+
+When exactly one runner remains after the head start, the shrinking circle freezes and a blue 20-meter escape zone appears for everyone. The last runner has three minutes to enter it and wins immediately on a new GPS fix with accuracy within 20 meters. Hunters win if the runner is tagged, leaves, or the escape timer expires. The server resolves expiry before accepting GPS; cached fixes cannot win. Existing reveals still work during the chase, and no new power-ups spawn.
+
+The target is a mapped sidewalk point, normally 60–400 meters from the runner’s last position, inside the current circle. If that circle cannot fit a separated sidewalk target, the final chase uses the last larger circle (or starting circle), keeping the escape destination on campus paths. Walking-path geometry does not guarantee access or routing distance. GPS estimates and the honor-system tagging button still apply. If multiple requests arrive together, the room lock determines which accepted action resolves first. The final result remains recorded for the room’s lifetime.
+
+Demo: use “Preview final chase,” then “Reach escape zone (demo)” for a runner win or “Skip to escape timeout” for a hunters win. Start new rooms after upgrading the frontend and SQL.
