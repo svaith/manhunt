@@ -180,4 +180,28 @@ await check('leaving is distinct from being caught and stores its timestamp',asy
  await action(0,code,'start',{hunters:1,selection:'manual',hunter_ids:[ids[0]]});
  s=await action(1,code,'leave');assert.equal(s.players[1].caught_at,undefined);assert.ok(s.players[1].left_at>=s.started_at);await action(0,code,'end');
 });
+await check('only host can kick; self-kicks and invalid targets are rejected',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ await assert.rejects(()=>action(1,code,'kick',{player_id:ids[2]}),/Only the host/);
+ await assert.rejects(()=>action(0,code,'kick',{player_id:ids[0]}),/themselves/);
+ await assert.rejects(()=>action(0,code,'kick',{player_id:'missing'}),/not in this lobby/);
+ await assert.rejects(()=>action(0,code,'kick',{}),/not in this lobby/);
+ s=await action(0,code);assert.equal(s.players.length,3);await action(0,code,'end');
+});
+await check('kicked identity loses access and cannot rejoin; others stay in lobby',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);await action(1,code,'poll',gps);
+ s=await action(0,code,'kick',{player_id:ids[1]});assert.equal(s.players.length,2);assert.equal(s.phase,'lobby');assert.ok(!s.players.some(p=>p.id===ids[1]));assert.ok(!('kicked_ids' in s));
+ await assert.rejects(()=>action(1,code),/removed from this lobby/);
+ await assert.rejects(()=>enter(1,'New nickname',code),/removed from this lobby/);
+ s=await action(2,code);assert.equal(s.players.length,2);assert.ok(!('kicked_ids' in s));
+ await action(0,code,'poll',gps);await action(2,code,'poll',gps);s=await action(0,code,'start',{hunters:1});assert.equal(s.phase,'headstart');await action(0,code,'end');
+});
+await check('kick is unavailable after start and after game ends',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);for(const i of [0,1])await action(i,code,'poll',gps);
+ await action(0,code,'start',{hunters:1});
+ await assert.rejects(()=>action(0,code,'kick',{player_id:ids[1]}),/waiting lobby/);
+ await edit(code,s=>{s.phase='active';s.deadline=stamp()+300;});
+ await assert.rejects(()=>action(0,code,'kick',{player_id:ids[1]}),/waiting lobby/);
+ await action(0,code,'end');await assert.rejects(()=>action(0,code,'kick',{player_id:ids[1]}),/waiting lobby/);
+});
 console.log(`${count} database checks passed`);await db.close();
