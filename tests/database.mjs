@@ -215,7 +215,7 @@ async function finalRoom(){
  await edit(c,s=>{s.phase='active';s.round=1;s.deadline=stamp()+300;});return c;
 }
 await check('last runner triggers a public sidewalk escape zone and freezes shrinking',async()=>{
- code=await finalRoom();s=await action(1,code,'tag');assert.ok(s.escape);assert.equal(s.escape.runner_id,ids[2]);assert.equal(s.escape.radius,20);assert.equal(s.deadline-s.server_now,180);assert.equal(s.powerup,null);
+ code=await finalRoom();s=await action(1,code,'tag');assert.ok(s.escape);assert.equal(s.escape.runner_id,ids[2]);assert.equal(s.escape.radius,30);assert.equal(s.deadline-s.server_now,180);assert.equal(s.powerup,null);
  assert.ok(CAMPUS_PATH_POINTS.some(([lat,lng])=>lat===s.escape.lat&&lng===s.escape.lng));
  const d=(await db.query('select public.manhunt_distance($1,$2) d',[gps,s.escape])).rows[0].d;assert.ok(d>=60&&d<=400);
  const hunterView=s.escape;const runnerView=(await action(2,code)).escape;assert.deepEqual(runnerView,hunterView);
@@ -232,7 +232,8 @@ await check('only a fresh accurate last-runner fix can win; result survives late
  s=await action(2,code,'poll',{...target,accuracy:50});assert.equal(s.phase,'active');
  s=await action(2,code);assert.equal(s.phase,'active');
  s=await action(2,code,'poll',{...target,captured_at:s.escape.spawned_at-1});assert.equal(s.phase,'active');
- s=await action(2,code,'poll',{...target,captured_at:stamp()});assert.equal(s.phase,'finished');assert.equal(s.winner,'runner');assert.equal(s.winner_id,ids[2]);assert.ok(s.players.every(p=>p.lat===null));
+ s=await action(2,code,'poll',{...target,lat:target.lat+35/111195,captured_at:stamp()});assert.equal(s.phase,'active');
+ s=await action(2,code,'poll',{...target,lat:target.lat+25/111195,captured_at:stamp()});assert.equal(s.phase,'finished');assert.equal(s.winner,'runner');assert.equal(s.winner_id,ids[2]);assert.ok(s.players.every(p=>p.lat===null));
  const reason=s.end_reason,ended=s.ended_at;s=await action(2,code,'leave');assert.equal(s.ended_at,ended);assert.equal(s.players[2].left,undefined);await action(0,code,'end');s=await action(0,code,'leave');assert.equal(s.winner,'runner');assert.equal(s.end_reason,reason);
 });
 await check('escape timeout is resolved before accepting GPS; runner is not listed as caught',async()=>{
