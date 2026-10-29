@@ -54,15 +54,15 @@ await check('starting circle rejects an outside start',async()=>{
  await assert.rejects(()=>action(0,code,'start',{hunters:1}),/starting circle/);
  await action(0,code,'end');
 });
-await check('runner pings remain frozen for 60 seconds while own GPS stays live',async()=>{
- s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);
- await action(0,code,'poll',gps);await action(1,code,'poll',gps);
- const moved={...gps,lat:gps.lat+.001};const own=await action(1,code,'poll',moved);
- assert.equal(own.players[1].lat,moved.lat);
- const other=await action(0,code);assert.equal(other.players[1].lat,gps.lat);
- await edit(code,s=>s.players[1].ping.updated=stamp()-59);await action(1,code,'poll',moved);s=await action(0,code);assert.equal(s.players[1].lat,gps.lat);
- await edit(code,s=>s.players[1].ping.updated=stamp()-61);
- await action(1,code,'poll',moved);s=await action(0,code);assert.equal(s.players[1].lat,moved.lat);
+await check('runners are live to hunters and runners on polls and reconnects; legacy pings ignored',async()=>{
+ s=await enter(0,'Host');code=s.code;await enter(1,'Runner',code);await enter(2,'Runner 2',code);
+ await edit(code,s=>{s.phase='active';s.deadline=stamp()+300;s.players[0].role='hunter';for(const p of s.players)Object.assign(p,gps,{updated:stamp(),ping:{...gps,updated:stamp()-100}});});
+ const moved={...gps,lat:gps.lat+.001};s=await action(1,code,'poll',moved);assert.equal(s.players[1].lat,moved.lat);
+ for(const i of [0,2])for(const view of [await action(i,code),await enter(i,'Reconnect',code)]){
+  assert.equal(view.players[1].lat,moved.lat);assert.equal(view.players[1].location_kind,'live');assert.ok(!('ping' in view.players[1]));
+  if(i===2)assert.equal(view.players[0].lat,null);
+ }
+ const newer={...gps,lat:gps.lat+.002};await action(1,code,'poll',newer);s=await action(2,code);assert.equal(s.players[1].lat,newer.lat);
  await action(0,code,'end');
 });
 await check('nearby warning is hunt-only, private, fresh, and uses 30m entry/40m reset',async()=>{
