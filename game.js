@@ -11,7 +11,6 @@ export function onCampus(p) {
   return inside;
 }
 export const INTERVAL = 300;
-export const RUNNER_PING_SECONDS = 60;
 export function distance(a, b) {
   const rad = Math.PI / 180;
   const h = Math.sin((b.lat-a.lat)*rad/2)**2 + Math.cos(a.lat*rad)*Math.cos(b.lat*rad)*Math.sin((b.lng-a.lng)*rad/2)**2;

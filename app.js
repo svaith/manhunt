@@ -1,5 +1,5 @@
 import {compassHeading, proximityTransition} from './v2.js';
-import {spawnPowerup, collectDemoPowerup, activateDemoReveal, revealActive, RUNNER_PING_SECONDS, CAMPUS, ZONE_DESTINATIONS, nextCircle, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
+import {spawnPowerup, collectDemoPowerup, activateDemoReveal, revealActive, CAMPUS, ZONE_DESTINATIONS, nextCircle, fresh, outside, formatTime, demoState, advanceDemo} from './game.js';
 const $=id=>document.getElementById(id);
 let client,uid,state,map,circle,next,markers=new Map(),demo=false,joinMode=false,busy=false,polling=false,watch=null,position=null,lastUpload=0,offset=0,lastSuccess=0,timerHandle,pollHandle,wakeLock;
 let heading=null,headingAt=0,compassOn=false,nearLatch=false;
@@ -31,7 +31,7 @@ $('entry-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{
     const data=await rpc('manhunt_enter',{p_name:name,p_code:joinMode?$('room-code').value.trim().toUpperCase():null});demo=false;state=data;localStorage.setItem('manhunt-room',data.code);openGame();
   }finally{$('entry-submit').disabled=false;}
 });};
-$('demo-button').onclick=()=>{demo=true;uid='me';offset=0;state=demoState(now());for(const p of state.players)p.location_kind=p.id==='me'||p.role==='hunter'?'live':'ping';openGame();};
+$('demo-button').onclick=()=>{demo=true;uid='me';offset=0;state=demoState(now());for(const p of state.players)p.location_kind='live';openGame();};
 function openGame(){
   $('welcome').hidden=true;$('game').hidden=false;$('demo-banner').hidden=!demo;
   if(!map){
@@ -130,7 +130,7 @@ function render(){
   $('players').replaceChildren(...state.players.filter(p=>!p.left).map(p=>{
     const li=document.createElement('li'),av=document.createElement('span'),name=document.createElement('span'),sub=document.createElement('small'),badge=document.createElement('span');
     av.className='avatar'+(p.role==='hunter'?' infected':'');av.textContent=p.name.slice(0,2).toUpperCase();name.className='player-name';name.textContent=p.name+(p.id===uid?' (you)':'');
-    sub.textContent=finished?(p.reason||''):p.role==='hunter'&&me?.role!=='hunter'&&!revealActive(state,uid,now())?'Location hidden':p.lat==null?(p.role==='hunter'?'Location hidden':'Waiting for GPS'):p.id===uid||p.location_kind==='live'?'Live GPS':`Last seen ${Math.max(0,Math.floor(now()-p.updated))}s ago`;name.append(sub);
+    sub.textContent=finished?(p.reason||''):p.role==='hunter'&&me?.role!=='hunter'&&!revealActive(state,uid,now())?'Location hidden':p.lat==null?(p.role==='hunter'?'Location hidden':'Waiting for GPS'):fresh(p,now())?'Live GPS':`GPS ${Math.max(0,Math.floor(now()-p.updated))}s old`;name.append(sub);
     badge.className='badge'+(p.role==='hunter'?' infected':'');badge.textContent=lobby?'Ready?':p.role;li.append(av,name,badge);return li;
   }));
   if(map){
@@ -146,23 +146,23 @@ function render(){
     for(const entry of state.players){
       const p=entry.id===uid&&position&&Date.now()-position.captured<15000?{...entry,...position,updated:now()}:entry;
       if((p.role==='hunter'&&me?.role!=='hunter'&&p.id!==uid&&!revealActive(state,uid,now()))||p.lat==null||p.left||finished)continue;visible.add(p.id);
-      const icon=L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:`<div class="player-marker ${p.role==='hunter'?'infected':''} ${p.location_kind==='ping'&&p.id!==uid?'ping-marker':fresh(p,now())?'':'stale'}"></div>`});
+      const icon=L.divIcon({className:'',iconSize:[34,34],iconAnchor:[17,17],html:`<div class="player-marker ${p.role==='hunter'?'infected':''} ${fresh(p,now())?'':'stale'}"></div>`});
       let marker=markers.get(p.id);if(!marker){marker=L.marker([p.lat,p.lng]).addTo(map);markers.set(p.id,marker);}marker.setLatLng([p.lat,p.lng]).setIcon(icon);
       marker.getElement()?.querySelector('.player-marker')?.append(document.createTextNode(p.name.slice(0,2).toUpperCase()));
       if(p.id===uid&&heading!=null&&Date.now()-headingAt<10000){const arrow=document.createElement('span');arrow.className='heading-arrow';arrow.style.transform=`rotate(${heading}deg)`;marker.getElement()?.querySelector('.player-marker')?.append(arrow);}
-      if(p.location_kind==='ping'&&p.id!==uid)marker.setOpacity(Math.max(.4,1-(now()-p.updated)/(RUNNER_PING_SECONDS*2)));else marker.setOpacity(1);
-      const label=document.createElement('span');label.textContent=`${p.name} · ${p.role}${p.id!==uid&&p.location_kind==='ping'?` · last seen ${Math.max(0,Math.floor(now()-p.updated))}s ago`:fresh(p,now())?' · live':' · stale'}`;marker.unbindTooltip().bindTooltip(label,{direction:'top',offset:[0,-18]});
+      marker.setOpacity(fresh(p,now())?1:.5);
+      const label=document.createElement('span');label.textContent=`${p.name} · ${p.role}${fresh(p,now())?' · live':` · GPS ${Math.max(0,Math.floor(now()-p.updated))}s old`}`;marker.unbindTooltip().bindTooltip(label,{direction:'top',offset:[0,-18]});
     }
     for(const [id,marker]of markers){if(!visible.has(id)){marker.remove();markers.delete(id);}}
   }
-  $('location-rule').textContent=me?.role==='hunter'?'Hunters live · runners ping every 1 min':revealActive(state,uid,now())?'Reveal active · hunters live':'Only you live · runners ping every 1 min';
+  $('location-rule').textContent=me?.role==='hunter'?'Runners and fellow hunters live':revealActive(state,uid,now())?'Reveal active · all players live':'Runners live · hunters hidden';
   updateClock();
 }
 function updateClock(){
   if(!state)return;updatePowerups();
   const revealing=revealActive(state,uid,now());
   if(revealing!==wasRevealing){wasRevealing=revealing;render();return;}
-  updatePingCountdown();if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
+  if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
   $('phase-label').textContent={lobby:'WAITING ROOM',headstart:'RUNNERS’ HEAD START',active:'NEXT CIRCLE IN',finished:'GAME OVER'}[phase];
   $('round-label').textContent=phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
@@ -210,22 +210,6 @@ function updateProximity(){
 }
 $('dismiss-nearby').onclick=()=>$('nearby-alert').hidden=true;
 
-function updatePingCountdown(){
- const runners=state.players.filter(p=>p.role==='runner'&&p.id!==uid&&!p.left);
- const active=state.phase!=='finished';
- if(demo&&active){for(const p of runners)if(p.updated!=null&&now()-p.updated>=RUNNER_PING_SECONDS)p.updated=now();}
- const known=runners.filter(p=>p.updated!=null&&p.lat!=null);
- let label='--:--',note='No other runners to ping';
- if(!active)note='Game finished';
- else if(runners.length&&known.length===0)note='Waiting for runner GPS';
- else if(known.length){
-  const remaining=Math.min(...known.map(p=>p.updated+RUNNER_PING_SECONDS-now()));
-  label=formatTime(remaining);
-  note=remaining<=0?'Ping due · waiting for fresh GPS':'Next runner update · individual pings may differ';
- }
- $('ping-countdown').textContent=label;$('ping-note').textContent=note;
-}
-
 $('hunter-mode').onchange=()=>render();
 $('hunter-select').onchange=()=>render();
 function announceCatches(){
@@ -243,7 +227,7 @@ $('demo-zone').onchange=()=>{
  if(!demo)return;
  $('demo-banner').querySelector('span').textContent=$('demo-zone').value==='random'?'DEMO · Simulated players and locations. Nothing is shared.':'ZONE ROUTE PREVIEW · Players stay put so you can inspect every circle.';
  state=demoState(now());
- for(const p of state.players)p.location_kind=p.id==='me'||p.role==='hunter'?'live':'ping';
+ for(const p of state.players)p.location_kind='live';
  if($('demo-zone').value!=='random'){
   state.next=nextCircle({...CAMPUS,target:ZONE_DESTINATIONS[Number($('demo-zone').value)]});
  }

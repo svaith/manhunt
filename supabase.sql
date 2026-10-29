@@ -98,7 +98,7 @@ begin
 end;
 $$;
 
--- Viewer-specific locations. Raw GPS and cached runner pings never leak through.
+-- Runners are live for all room members. Hunter GPS remains viewer-specific.
 create or replace function public.manhunt_snapshot(s jsonb, t double precision)
 returns jsonb language plpgsql stable set search_path = '' as $$
 declare viewer jsonb; p jsonb; q jsonb; output jsonb:='[]'; near boolean:=false;
@@ -119,12 +119,11 @@ begin
   ready:=p->>'lat' is not null and coalesce(t-(p->>'updated')::float8,999)<=30
     and coalesce((p->>'accuracy')::float8,999)<=100
     and public.manhunt_distance(p,s->'circle')<=(s->'circle'->>'radius')::float8+20;
-  live:=p->>'id'=auth.uid()::text or (p->>'role'='hunter' and (viewer->>'role'='hunter' or (s->>'phase'='active' and viewer->>'role'='runner' and coalesce((viewer->>'reveal_until')::float8,0)>t)));
-  q:=(p-'ping'-'stats_anchor')||jsonb_build_object('ready',ready,'location_kind',case when live then 'live' else 'ping' end);
+  live:=p->>'role'='runner' or p->>'id'=auth.uid()::text or (p->>'role'='hunter' and (viewer->>'role'='hunter' or (s->>'phase'='active' and viewer->>'role'='runner' and coalesce((viewer->>'reveal_until')::float8,0)>t)));
+  q:=(p-'ping'-'stats_anchor')||jsonb_build_object('ready',ready,'location_kind',case when live then 'live' else 'hidden' end);
   if p->>'id'<>auth.uid()::text then q:=q-'powerups'-'reveal_until'-'stats';end if;
   if not live then
    q:=q||jsonb_build_object('lat',null,'lng',null,'accuracy',null,'updated',null);
-   if p->>'role'='runner' and p->'ping' is not null then q:=q||(p->'ping');end if;
   end if;
   if s->>'phase'='finished' or coalesce((p->>'left')::boolean,false) then
    q:=q||'{"lat":null,"lng":null,"accuracy":null,"updated":null}'::jsonb;
@@ -233,9 +232,6 @@ begin
    p:=players->idx;
    if s->>'phase' in ('headstart','active') and s->>'started_at' is not null then p:=public.manhunt_track(p,p_payload,t);end if;
    p:=p||jsonb_build_object('lat',lat,'lng',lng,'accuracy',accuracy,'updated',t);
-   if p->>'role'='runner' and (p->'ping' is null or p->'ping'='null'::jsonb or t-coalesce((p->'ping'->>'updated')::float8,0)>=60) then
-    p:=p||jsonb_build_object('ping',jsonb_build_object('lat',lat,'lng',lng,'accuracy',accuracy,'updated',t));
-   end if;
    if p->>'role'='runner' and p->>'pending_until' is not null and accuracy<=100 then
      if public.manhunt_distance(p,p->'pending_circle')>(p->'pending_circle'->>'radius')::float8+20 then p:=p||'{"role":"hunter","reason":"Outside the circle"}'::jsonb;end if;
      p:=p||'{"pending_until":null,"pending_circle":null}'::jsonb;
@@ -267,7 +263,7 @@ begin
    end loop;
    for i in 0..n-1 loop
     p:=(players->i)||jsonb_build_object('initial_hunter',players->i->>'role'='hunter','stats',jsonb_build_object('distance_m',0,'top_mps',0,'collected',0,'used',0),'stats_anchor',null);
-    players:=jsonb_set(players,array[i::text],p||jsonb_build_object('ping',case when p->>'role'='runner' then jsonb_build_object('lat',p->'lat','lng',p->'lng','accuracy',p->'accuracy','updated',p->'updated') else null end));
+    players:=jsonb_set(players,array[i::text],p||jsonb_build_object('ping',null));
    end loop;
    s:=s||jsonb_build_object('phase','headstart','round',0,'deadline',t+300,'started_at',t);
  elsif p_action='tag' then
