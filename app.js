@@ -183,7 +183,7 @@ function updateClock(){
   if(heading!=null&&Date.now()-headingAt>=10000){heading=null;render();return;}const phase=state.phase,remaining=state.deadline?Math.max(0,state.deadline-now()):0;
   $('phase-label').textContent={lobby:'WAITING ROOM',headstart:'RUNNERS’ HEAD START',active:'NEXT CIRCLE IN',finished:'GAME OVER'}[phase];
   if(state.escape&&phase==='active')$('phase-label').textContent='FINAL ESCAPE';
-  $('round-label').textContent=phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
+  $('round-label').textContent=state.escape&&phase==='active'?'LAST RUNNER':phase==='lobby'?'LOBBY':phase==='finished'?'FINISHED':`ROUND ${state.round}`;
   $('timer').textContent=phase==='lobby'?'--:--':phase==='finished'?'GG':formatTime(remaining);
   $('timer-caption').textContent=phase==='lobby'?'Waiting for your friends':phase==='finished'?'The hunt has ended':phase==='headstart'?'Hunters wait. Runners, get moving.':'Reach the dashed circle before time runs out.';
   if(state.escape&&phase==='active')$('timer-caption').textContent=state.escape.runner_id===uid?'Shrinking paused. Reach the blue zone to escape.':'Shrinking paused. Catch the runner before they escape.';
@@ -262,7 +262,7 @@ function updatePowerups(){
  $('powerup-count').textContent=count;
  $('reveal-button').disabled=!active||me?.role!=='runner'||count<1;
  $('reveal-button').textContent=seconds>0?'Extend reveal · +60s':'Reveal hunters · 60s';
- $('powerup-status').textContent=me?.role==='hunter'?'Only runners can collect and use reveals.':!active?'First pickup spawns at the first shrink after hunting begins.':state.powerup?'A sidewalk pickup is on the map. First runner within 20m collects it.':count?'Saved for whenever you need it.':'Pickup collected or not spawned yet. Another appears next circle.';
+ $('powerup-status').textContent=state.phase==='finished'?'Game finished.':active&&state.escape?'Final chase: use saved reveals; no new pickups will spawn.':me?.role==='hunter'?'Only runners can collect and use reveals.':!active?'First pickup spawns at the first shrink after hunting begins.':state.powerup?'A sidewalk pickup is on the map. First runner within 20m collects it.':count?'Saved for whenever you need it.':'Pickup collected or not spawned yet. Another appears next circle.';
  $('reveal-timer').textContent=revealActive(state,uid,now())?`Hunters revealed for you · ${formatTime(seconds)}`:count?'Each item reveals all hunters privately for 60 seconds.':'Unused items stack. Getting caught forfeits them.';
  $('demo-pickup').hidden=!demo||!active||me?.role!=='runner'||!state.powerup;
 }
