@@ -51,7 +51,7 @@ async function sync(action='poll',extra={}){
   try{
     const payload={...extra};
     if(position&&Date.now()-position.captured<15000&&Date.now()-lastUpload>=4000&&state.phase!=='finished'){
-      const {lat,lng,accuracy}=position;Object.assign(payload,{lat,lng,accuracy,captured_at:position.captured/1000});lastUpload=Date.now();
+      const {lat,lng,accuracy}=position;Object.assign(payload,{lat,lng,accuracy,captured_at:position.captured/1000+offset});lastUpload=Date.now();
     }
     const data=await rpc('manhunt_action',{p_code:state.code,p_action:action,p_payload:payload});
     state=data;lastSuccess=Date.now();$('connection').hidden=true;render();
